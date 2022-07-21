@@ -31,7 +31,7 @@ typedef struct State8080{
     uint8_t    d;    
     uint8_t    e;    
     uint8_t    h;    
-    uint8_t    l;    8
+    uint8_t    l;    
     uint16_t    sp;    
     uint16_t    pc;    //program counter
     uint8_t     *memory;    // simulate ram
@@ -45,6 +45,17 @@ void UnimplementedInstruction(State8080* state){
 	exit(1);
 }
 
+int parity(int x, int size){
+	int i;
+	int p = 0;
+	x = (x & ((1<<size)-1));
+	for (i=0;i<size;i++){
+		if(x & 0x1) p++;
+		x = x >> 1;
+	}
+	return (0 == (p & 0x1));
+}
+
 int Emulate8080Op(State8080* state){
 	unsigned char *opcode = &state->memory[state->pc];
 
@@ -53,10 +64,10 @@ int Emulate8080Op(State8080* state){
 		case 0x01:	state->c = opcode[1];
 					state->b = opcode[2];
 					state->pc += 2; break;
-		case 0x02:	uint16_t bc = state->b << 8 | state->c;
+		case 0x02:	uint32_t bc = (state->b << 8 )| state->c;
 					state->memory[bc] = state->a;
 					 break;
-		case 0x03:	uint16_t bc = state->b << 8 | state->c;
+		case 0x03:	uint32_t bc = state->b << 8 | state->c;
 					bc += 1;
 					state->b = (bc & 0xffff) >> 8;
 					state->c = (bc & 0xff);
@@ -313,14 +324,79 @@ int Emulate8080Op(State8080* state){
 			}
 			break;
 		case 0x7f: UnimplementedInstruction(state); break;
-		case 0x80: UnimplementedInstruction(state); break;
-		case 0x81: UnimplementedInstruction(state); break;
-		case 0x82: UnimplementedInstruction(state); break;
-		case 0x83: UnimplementedInstruction(state); break;
-		case 0x84: UnimplementedInstruction(state); break;
-		case 0x85: UnimplementedInstruction(state); break;
-		case 0x86: UnimplementedInstruction(state); break;
-		case 0x87: UnimplementedInstruction(state); break;
+		case 0x80: {
+			uint16_t answer = (uint16_t)state->a + (uint16_t)state->b;
+			state->cc.z = ((answer & 0xff) == 0);
+			state->cc.s = ((answer & 0x80) != 0);
+			state->cc.cy = (answer > 0xff);
+			state->cc.p = parity(answer&0xff, 8);
+			state->a = answer & 0xff;
+		} 
+		break;
+		case 0x81: {
+			uint16_t answer = (uint16_t)state->a + (uint16_t)state->c;
+			state->cc.z = ((answer & 0xff) == 0);
+			state->cc.s = ((answer & 0x80) != 0);
+			state->cc.cy = (answer > 0xff);
+			state->cc.p = parity(answer&0xff, 8);
+			state->a = answer & 0xff;
+		}
+		break;
+		case 0x82: {
+			uint16_t answer = (uint16_t)state->a + (uint16_t)state->d;
+			state->cc.z = ((answer & 0xff) == 0);
+			state->cc.s = ((answer & 0x80) != 0);
+			state->cc.cy = (answer > 0xff);
+			state->cc.p = parity(answer&0xff, 8);
+			state->a = answer & 0xff;
+		}
+		break;
+		case 0x83: {
+			uint16_t answer = (uint16_t)state->a + (uint16_t)state->e;
+			state->cc.z = ((answer & 0xff) == 0);
+			state->cc.s = ((answer & 0x80) != 0);
+			state->cc.cy = (answer > 0xff);
+			state->cc.p = parity(answer&0xff, 8);
+			state->a = answer & 0xff;
+		}
+		break;
+		case 0x84: {
+			uint16_t answer = (uint16_t)state->a + (uint16_t)state->h;
+			state->cc.z = ((answer & 0xff) == 0);
+			state->cc.s = ((answer & 0x80) != 0);
+			state->cc.cy = (answer > 0xff);
+			state->cc.p = parity(answer&0xff, 8);
+			state->a = answer & 0xff;
+		}
+		break;
+		case 0x85: {
+			uint16_t answer = (uint16_t)state->a + (uint16_t)state->l;
+			state->cc.z = ((answer & 0xff) == 0);
+			state->cc.s = ((answer & 0x80) != 0);
+			state->cc.cy = (answer > 0xff);
+			state->cc.p = parity(answer&0xff, 8);
+			state->a = answer & 0xff;
+		}
+		break;
+		case 0x86: {    
+            uint16_t offset = (state->h<<8) | (state->l);    
+            uint16_t answer = (uint16_t) state->a + state->memory[offset];    
+            state->cc.z = ((answer & 0xff) == 0);    
+            state->cc.s = ((answer & 0x80) != 0);    
+            state->cc.cy = (answer > 0xff);    
+            state->cc.p = parity(answer&0xff, 8);    
+            state->a = answer & 0xff;    
+        }
+		break;
+		case 0x87: {
+			uint16_t answer = (uint16_t)state->a + (uint16_t)state->a;
+			state->cc.z = ((answer & 0xff) == 0);
+			state->cc.s = ((answer & 0x80) != 0);
+			state->cc.cy = (answer > 0xff);
+			state->cc.p = parity(answer&0xff, 8);
+			state->a = answer & 0xff;
+		}
+		break; //ADD A
 		case 0x88: UnimplementedInstruction(state); break;
 		case 0x89: UnimplementedInstruction(state); break;
 		case 0x8a: UnimplementedInstruction(state); break;
@@ -839,6 +915,27 @@ int Disassembler8080Op(unsigned char *codebuffer, int pc){
     }
 
     return opbytes;
+}
+
+void ReadFileIntoMemory (State8080* state, char* filename, uint32_t offset){
+	FILE *f = fopen(filename, "rb");
+	if(f==NULL){
+		printf("error: Couldn't open %s \n", filename);
+		exit(1);
+	}
+	fseek(f, 0L, SEEK_END);
+	int fsize = ftell(f);
+	fseek(f, 0L, SEEK_SET);
+
+	uint8_t *buffer = &state->memory[offset];
+	fread(buffer, fsize, 1, f);
+	fclose(f);
+}
+
+State8080* Init8080(void){
+	State8080* state = calloc(1, sizeof(State8080));
+	state->memory = malloc(0x10000);
+	return state;
 }
 
 int main( int argc, char**argv){
