@@ -1,0 +1,17 @@
+C:\Users\wbjhe\source\repos\8080emu\bin\Debug\net6.0-windows\8080emu.exe
+C:\Users\wbjhe\source\repos\8080emu\bin\Debug\net6.0-windows\8080emu.deps.json
+C:\Users\wbjhe\source\repos\8080emu\bin\Debug\net6.0-windows\8080emu.runtimeconfig.json
+C:\Users\wbjhe\source\repos\8080emu\bin\Debug\net6.0-windows\8080emu.dll
+C:\Users\wbjhe\source\repos\8080emu\bin\Debug\net6.0-windows\8080emu.pdb
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\8080emu.csproj.AssemblyReference.cache
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\_8080emu.Form1.resources
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\8080emu.csproj.GenerateResource.cache
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\8080emu.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\8080emu.AssemblyInfoInputs.cache
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\8080emu.AssemblyInfo.cs
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\8080emu.csproj.CoreCompileInputs.cache
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\8080emu.dll
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\refint\8080emu.dll
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\8080emu.pdb
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\8080emu.genruntimeconfig.cache
+C:\Users\wbjhe\source\repos\8080emu\obj\Debug\net6.0-windows\ref\8080emu.dll
