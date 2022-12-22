@@ -1,0 +1,11 @@
+﻿  emu8080.c
+  emu8080_tests.c
+C:\Users\wbjhe\source\repos\8080emu\emu8080_tests.c(49,31): warning C4090: 'function': different 'const' qualifiers
+C:\Users\wbjhe\source\repos\8080emu\emu8080_tests.c(49,11): warning C4047: 'initializing': 'FILE *' differs in levels of indirection from 'errno_t'
+C:\Users\wbjhe\source\repos\8080emu\emu8080_tests.c(131,45): warning C4305: 'function': truncation from 'unsigned __int64' to 'unsigned long'
+  Generating Code...
+  emu8080.h
+Debug\emu8080.obj : warning LNK4042: object specified more than once; extras ignored
+emu8080_tests.obj : error LNK2019: unresolved external symbol _i8080_init referenced in function _run_test
+emu8080_tests.obj : error LNK2019: unresolved external symbol _i8080_step referenced in function _run_test
+C:\Users\wbjhe\source\repos\8080emu\Debug\8080emu.exe : fatal error LNK1120: 2 unresolved externals

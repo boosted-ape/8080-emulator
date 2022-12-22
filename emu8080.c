@@ -1,863 +1,783 @@
-/*    *codebuffer is a valid pointer to 8080 assembly code    
-    pc is the current offset into the code    
+#include "emu8080.h"
 
-    returns the number of bytes of the op
+// this array defines the number of cycles one opcode takes.
+// note that there are some special cases: conditional RETs and CALLs
+// add +6 cycles if the condition is met
+// clang-format off
+static const uint8_t OPCODES_CYCLES[256] = {
+    //  0  1   2   3   4   5   6   7   8  9   A   B   C   D   E  F
+        4, 10, 7,  5,  5,  5,  7,  4,  4, 10, 7,  5,  5,  5,  7, 4,  // 0
+        4, 10, 7,  5,  5,  5,  7,  4,  4, 10, 7,  5,  5,  5,  7, 4,  // 1
+        4, 10, 16, 5,  5,  5,  7,  4,  4, 10, 16, 5,  5,  5,  7, 4,  // 2
+        4, 10, 13, 5,  10, 10, 10, 4,  4, 10, 13, 5,  5,  5,  7, 4,  // 3
+        5, 5,  5,  5,  5,  5,  7,  5,  5, 5,  5,  5,  5,  5,  7, 5,  // 4
+        5, 5,  5,  5,  5,  5,  7,  5,  5, 5,  5,  5,  5,  5,  7, 5,  // 5
+        5, 5,  5,  5,  5,  5,  7,  5,  5, 5,  5,  5,  5,  5,  7, 5,  // 6
+        7, 7,  7,  7,  7,  7,  7,  7,  5, 5,  5,  5,  5,  5,  7, 5,  // 7
+        4, 4,  4,  4,  4,  4,  7,  4,  4, 4,  4,  4,  4,  4,  7, 4,  // 8
+        4, 4,  4,  4,  4,  4,  7,  4,  4, 4,  4,  4,  4,  4,  7, 4,  // 9
+        4, 4,  4,  4,  4,  4,  7,  4,  4, 4,  4,  4,  4,  4,  7, 4,  // A
+        4, 4,  4,  4,  4,  4,  7,  4,  4, 4,  4,  4,  4,  4,  7, 4,  // B
+        5, 10, 10, 10, 11, 11, 7,  11, 5, 10, 10, 10, 11, 17, 7, 11, // C
+        5, 10, 10, 10, 11, 11, 7,  11, 5, 10, 10, 10, 11, 17, 7, 11, // D
+        5, 10, 10, 18, 11, 11, 7,  11, 5, 5,  10, 4,  11, 17, 7, 11, // E
+        5, 10, 10, 4,  11, 11, 7,  11, 5, 5,  10, 4,  11, 17, 7, 11  // F
+};
+// clang-format on
 
-    step 1: read code into buffer
-    step 2: get a pointer to the beginning of the buffer
-    step 3: use the byte at the pointer to determine the opcode
-    step 4: print out the name of the opcode
-    step 5: advance the counter by the bytes used by the instruction
-    go to step 3 if not at the end of the buffer 
-*/
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdint.h>
+static const char* DISASSEMBLE_TABLE[] = { "nop", "lxi b,#", "stax b", "inx b",
+    "inr b", "dcr b", "mvi b,#", "rlc", "ill", "dad b", "ldax b", "dcx b",
+    "inr c", "dcr c", "mvi c,#", "rrc", "ill", "lxi d,#", "stax d", "inx d",
+    "inr d", "dcr d", "mvi d,#", "ral", "ill", "dad d", "ldax d", "dcx d",
+    "inr e", "dcr e", "mvi e,#", "rar", "ill", "lxi h,#", "shld", "inx h",
+    "inr h", "dcr h", "mvi h,#", "daa", "ill", "dad h", "lhld", "dcx h",
+    "inr l", "dcr l", "mvi l,#", "cma", "ill", "lxi sp,#", "sta $", "inx sp",
+    "inr M", "dcr M", "mvi M,#", "stc", "ill", "dad sp", "lda $", "dcx sp",
+    "inr a", "dcr a", "mvi a,#", "cmc", "mov b,b", "mov b,c", "mov b,d",
+    "mov b,e", "mov b,h", "mov b,l", "mov b,M", "mov b,a", "mov c,b", "mov c,c",
+    "mov c,d", "mov c,e", "mov c,h", "mov c,l", "mov c,M", "mov c,a", "mov d,b",
+    "mov d,c", "mov d,d", "mov d,e", "mov d,h", "mov d,l", "mov d,M", "mov d,a",
+    "mov e,b", "mov e,c", "mov e,d", "mov e,e", "mov e,h", "mov e,l", "mov e,M",
+    "mov e,a", "mov h,b", "mov h,c", "mov h,d", "mov h,e", "mov h,h", "mov h,l",
+    "mov h,M", "mov h,a", "mov l,b", "mov l,c", "mov l,d", "mov l,e", "mov l,h",
+    "mov l,l", "mov l,M", "mov l,a", "mov M,b", "mov M,c", "mov M,d", "mov M,e",
+    "mov M,h", "mov M,l", "hlt", "mov M,a", "mov a,b", "mov a,c", "mov a,d",
+    "mov a,e", "mov a,h", "mov a,l", "mov a,M", "mov a,a", "add b", "add c",
+    "add d", "add e", "add h", "add l", "add M", "add a", "adc b", "adc c",
+    "adc d", "adc e", "adc h", "adc l", "adc M", "adc a", "sub b", "sub c",
+    "sub d", "sub e", "sub h", "sub l", "sub M", "sub a", "sbb b", "sbb c",
+    "sbb d", "sbb e", "sbb h", "sbb l", "sbb M", "sbb a", "ana b", "ana c",
+    "ana d", "ana e", "ana h", "ana l", "ana M", "ana a", "xra b", "xra c",
+    "xra d", "xra e", "xra h", "xra l", "xra M", "xra a", "ora b", "ora c",
+    "ora d", "ora e", "ora h", "ora l", "ora M", "ora a", "cmp b", "cmp c",
+    "cmp d", "cmp e", "cmp h", "cmp l", "cmp M", "cmp a", "rnz", "pop b",
+    "jnz $", "jmp $", "cnz $", "push b", "adi #", "rst 0", "rz", "ret", "jz $",
+    "ill", "cz $", "call $", "aci #", "rst 1", "rnc", "pop d", "jnc $", "out p",
+    "cnc $", "push d", "sui #", "rst 2", "rc", "ill", "jc $", "in p", "cc $",
+    "ill", "sbi #", "rst 3", "rpo", "pop h", "jpo $", "xthl", "cpo $", "push h",
+    "ani #", "rst 4", "rpe", "pchl", "jpe $", "xchg", "cpe $", "ill", "xri #",
+    "rst 5", "rp", "pop psw", "jp $", "di", "cp $", "push psw", "ori #",
+    "rst 6", "rm", "sphl", "jm $", "ei", "cm $", "ill", "cpi #", "rst 7" };
 
-typedef struct ConditionCodes{
-	uint8_t    z:1;
-	uint8_t    s:1;
-	uint8_t    p:1;
-	uint8_t    cy:1;
-	uint8_t    ac:1;
-	uint8_t    pad:3;
-}ConditionCodes;
+#define SET_ZSP(c, val) \
+  do { \
+    c->zf = (val) == 0; \
+    c->sf = (val) >> 7; \
+    c->pf = parity(val); \
+  } while (0)
 
-typedef struct State8080{
-	uint8_t    a;    //registers
-    uint8_t    b;    
-    uint8_t    c;    
-    uint8_t    d;    
-    uint8_t    e;    
-    uint8_t    h;    
-    uint8_t    l;    8
-    uint16_t    sp;    
-    uint16_t    pc;    //program counter
-    uint8_t     *memory;    // simulate ram
-    struct      ConditionCodes      cc;    
-    uint8_t     int_enable; 
-}State8080;
+// memory helpers (the only four to use `read_byte` and `write_byte` function
+// pointers)
 
-void UnimplementedInstruction(State8080* state){
-	//pc will have advanced one, so undo
-	printf("Error: Unimplemented instruction\n");
-	exit(1);
+// reads a byte from memory
+static inline uint8_t i8080_rb(i8080* const c, uint16_t addr) {
+    return c->read_byte(c->userdata, addr);
 }
 
-int Emulate8080Op(State8080* state){
-	unsigned char *opcode = &state->memory[state->pc];
+// writes a byte to memory
+static inline void i8080_wb(i8080* const c, uint16_t addr, uint8_t val) {
+    c->write_byte(c->userdata, addr, val);
+}
 
-	switch(*opcode){
-		case 0x00:  break;
-		case 0x01:	state->c = opcode[1];
-					state->b = opcode[2];
-					state->pc += 2; break;
-		case 0x02:	uint16_t bc = state->b << 8 | state->c;
-					state->memory[bc] = state->a;
-					 break;
-		case 0x03:	uint16_t bc = state->b << 8 | state->c;
-					bc += 1;
-					state->b = (bc & 0xffff) >> 8;
-					state->c = (bc & 0xff);
-					break;
-		case 0x04: UnimplementedInstruction(state); break;
-		case 0x05: 							//DCR    B
-			{
-			uint8_t res = state->b - 1;
-			state->cc.z = (res == 0);
-			state->cc.s = (0x80 == (res & 0x80));
-			state->cc.p = parity(res, 8);
-			state->b = res;
-			}
-			break;
-		case 0x06: 							//MVI B,byte
-			state->b = opcode[1];
-			state->pc++;
-			break;
-		case 0x07: UnimplementedInstruction(state); break;
-		case 0x08: UnimplementedInstruction(state); break;
-		case 0x09: 							//DAD B
-			{
-			uint32_t hl = (state->h << 8) | state->l;
-			uint32_t bc = (state->b << 8) | state->c;
-			uint32_t res = hl + bc;
-			state->h = (res & 0xff00) >> 8;
-			state->l = res & 0xff;
-			state->cc.cy = ((res & 0xffff0000) > 0);
-			}
-			break;
-		case 0x0a: UnimplementedInstruction(state); break;
-		case 0x0b: UnimplementedInstruction(state); break;
-		case 0x0c: UnimplementedInstruction(state); break;
-		case 0x0d: 							//DCR    C
-			{
-			uint8_t res = state->c - 1;
-			state->cc.z = (res == 0);
-			state->cc.s = (0x80 == (res & 0x80));
-			state->cc.p = parity(res, 8);
-			state->c = res;
-			}
-			break;
-		case 0x0e: 							//MVI C,byte
-			state->c = opcode[1];
-			state->pc++;
-			break;
-		case 0x0f: 							//RRC
-			{
-				uint8_t x = state->a;
-				state->a = ((x & 1) << 7) | (x >> 1);
-				state->cc.cy = (1 == (x&1));
-			}
-			break;
-		case 0x10: UnimplementedInstruction(state); break;
-		case 0x11: 							//LXI	D,word
-			state->e = opcode[1];
-			state->d = opcode[2];
-			state->pc += 2;
-			break;
-		case 0x12: UnimplementedInstruction(state); break;
-		case 0x13: 							//INX    D
-			state->e++;
-			if (state->e == 0)
-				state->d++;
-			break;		
-		case 0x14: UnimplementedInstruction(state); break;
-		case 0x15: UnimplementedInstruction(state); break;
-		case 0x16: UnimplementedInstruction(state); break;
-		case 0x17: UnimplementedInstruction(state); break;
-		case 0x18: UnimplementedInstruction(state); break;
-		case 0x19: 							//DAD    D
-			{
-			uint32_t hl = (state->h << 8) | state->l;
-			uint32_t de = (state->d << 8) | state->e;
-			uint32_t res = hl + de;
-			state->h = (res & 0xff00) >> 8;
-			state->l = res & 0xff;
-			state->cc.cy = ((res & 0xffff0000) != 0);
-			}
-			break;
-		case 0x1a: 							//LDAX	D
-			{
-			uint16_t offset=(state->d<<8) | state->e;
-			state->a = state->memory[offset];
-			}
-			break;
-		case 0x1b: UnimplementedInstruction(state); break;
-		case 0x1c: UnimplementedInstruction(state); break;
-		case 0x1d: UnimplementedInstruction(state); break;
-		case 0x1e: UnimplementedInstruction(state); break;
-		case 0x1f: UnimplementedInstruction(state); break;
-		case 0x20: UnimplementedInstruction(state); break;
-		case 0x21: 							//LXI	H,word
-			state->l = opcode[1];
-			state->h = opcode[2];
-			state->pc += 2;
-			break;
-		case 0x22: UnimplementedInstruction(state); break;
-		case 0x23: 							//INX    H
-			state->l++;
-			if (state->l == 0)
-				state->h++;
-			break;		
-		case 0x24: UnimplementedInstruction(state); break;
-		case 0x25: UnimplementedInstruction(state); break;
-		case 0x26:  							//MVI H,byte
-			state->h = opcode[1];
-			state->pc++;
-			break;
-		case 0x27: UnimplementedInstruction(state); break;
-		case 0x28: UnimplementedInstruction(state); break;
-		case 0x29: 								//DAD    H
-			{
-			uint32_t hl = (state->h << 8) | state->l;
-			uint32_t res = hl + hl;
-			state->h = (res & 0xff00) >> 8;
-			state->l = res & 0xff;
-			state->cc.cy = ((res & 0xffff0000) != 0);
-			}
-			break;
-		case 0x2a: UnimplementedInstruction(state); break;
-		case 0x2b: UnimplementedInstruction(state); break;
-		case 0x2c: UnimplementedInstruction(state); break;
-		case 0x2d: UnimplementedInstruction(state); break;
-		case 0x2e: UnimplementedInstruction(state); break;
-		case 0x2f: UnimplementedInstruction(state); break;
-		case 0x30: UnimplementedInstruction(state); break;
-		case 0x31: 							//LXI	SP,word
-			state->sp = (opcode[2]<<8) | opcode[1];
-			state->pc += 2;
-			break;
-		case 0x32: 							//STA    (word)
-			{
-			uint16_t offset = (opcode[2]<<8) | (opcode[1]);
-			state->memory[offset] = state->a;
-			state->pc += 2;
-			}
-			break;
-		case 0x33: UnimplementedInstruction(state); break;
-		case 0x34: UnimplementedInstruction(state); break;
-		case 0x35: UnimplementedInstruction(state); break;
-		case 0x36: 							//MVI	M,byte
-			{					
-			//AC set if lower nibble of h was zero prior to dec
-			uint16_t offset = (state->h<<8) | state->l;
-			state->memory[offset] = opcode[1];
-			state->pc++;
-			}
-			break;
-		case 0x37: UnimplementedInstruction(state); break;
-		case 0x38: UnimplementedInstruction(state); break;
-		case 0x39: UnimplementedInstruction(state); break;
-		case 0x3a: 							//LDA    (word)
-			{
-			uint16_t offset = (opcode[2]<<8) | (opcode[1]);
-			state->a = state->memory[offset];
-			state->pc+=2;
-			}
-			break;
-		case 0x3b: UnimplementedInstruction(state); break;
-		case 0x3c: UnimplementedInstruction(state); break;
-		case 0x3d: UnimplementedInstruction(state); break;
-		case 0x3e: 							//MVI    A,byte
-			state->a = opcode[1];
-			state->pc++;
-			break;
-		case 0x3f: UnimplementedInstruction(state); break;
-		case 0x40: UnimplementedInstruction(state); break;
-		case 0x41: UnimplementedInstruction(state); break;
-		case 0x42: UnimplementedInstruction(state); break;
-		case 0x43: UnimplementedInstruction(state); break;
-		case 0x44: UnimplementedInstruction(state); break;
-		case 0x45: UnimplementedInstruction(state); break;
-		case 0x46: UnimplementedInstruction(state); break;
-		case 0x47: UnimplementedInstruction(state); break;
-		case 0x48: UnimplementedInstruction(state); break;
-		case 0x49: UnimplementedInstruction(state); break;
-		case 0x4a: UnimplementedInstruction(state); break;
-		case 0x4b: UnimplementedInstruction(state); break;
-		case 0x4c: UnimplementedInstruction(state); break;
-		case 0x4d: UnimplementedInstruction(state); break;
-		case 0x4e: UnimplementedInstruction(state); break;
-		case 0x4f: UnimplementedInstruction(state); break;
-		case 0x50: UnimplementedInstruction(state); break;
-		case 0x51: UnimplementedInstruction(state); break;
-		case 0x52: UnimplementedInstruction(state); break;
-		case 0x53: UnimplementedInstruction(state); break;
-		case 0x54: UnimplementedInstruction(state); break;
-		case 0x55: UnimplementedInstruction(state); break;
-		case 0x56: 							//MOV D,M
-			{
-			uint16_t offset = (state->h<<8) | (state->l);
-			state->d = state->memory[offset];
-			}
-			break;
-		case 0x57: UnimplementedInstruction(state); break;
-		case 0x58: UnimplementedInstruction(state); break;
-		case 0x59: UnimplementedInstruction(state); break;
-		case 0x5a: UnimplementedInstruction(state); break;
-		case 0x5b: UnimplementedInstruction(state); break;
-		case 0x5c: UnimplementedInstruction(state); break;
-		case 0x5d: UnimplementedInstruction(state); break;
-		case 0x5e: 							//MOV E,M
-			{
-			uint16_t offset = (state->h<<8) | (state->l);
-			state->e = state->memory[offset];
-			}
-			break;
-		case 0x5f: UnimplementedInstruction(state); break;
-		case 0x60: UnimplementedInstruction(state); break;
-		case 0x61: UnimplementedInstruction(state); break;
-		case 0x62: UnimplementedInstruction(state); break;
-		case 0x63: UnimplementedInstruction(state); break;
-		case 0x64: UnimplementedInstruction(state); break;
-		case 0x65: UnimplementedInstruction(state); break;
-		case 0x66: 							//MOV H,M
-			{
-			uint16_t offset = (state->h<<8) | (state->l);
-			state->h = state->memory[offset];
-			}
-			break;
-		case 0x67: UnimplementedInstruction(state); break;
-		case 0x68: UnimplementedInstruction(state); break;
-		case 0x69: UnimplementedInstruction(state); break;
-		case 0x6a: UnimplementedInstruction(state); break;
-		case 0x6b: UnimplementedInstruction(state); break;
-		case 0x6c: UnimplementedInstruction(state); break;
-		case 0x6d: UnimplementedInstruction(state); break;
-		case 0x6e: UnimplementedInstruction(state); break;
-		case 0x6f: state->l = state->a; break; //MOV L,A
-		case 0x70: UnimplementedInstruction(state); break;
-		case 0x71: UnimplementedInstruction(state); break;
-		case 0x72: UnimplementedInstruction(state); break;
-		case 0x73: UnimplementedInstruction(state); break;
-		case 0x74: UnimplementedInstruction(state); break;
-		case 0x75: UnimplementedInstruction(state); break;
-		case 0x76: UnimplementedInstruction(state); break;
-		case 0x77: 							//MOV    M,A
-			{
-			uint16_t offset = (state->h<<8) | (state->l);
-			state->memory[offset] = state->a;
-			}
-			break;
-		case 0x78: UnimplementedInstruction(state); break;
-		case 0x79: UnimplementedInstruction(state); break;
-		case 0x7a: state->a  = state->d;  break;	//MOV D,A
-		case 0x7b: state->a  = state->e;  break;	//MOV E,A
-		case 0x7c: state->a  = state->h;  break;	//MOV H,A
-		case 0x7d: UnimplementedInstruction(state); break;
-		case 0x7e: 							//MOV A,M
-			{
-			uint16_t offset = (state->h<<8) | (state->l);
-			state->a = state->memory[offset];
-			}
-			break;
-		case 0x7f: UnimplementedInstruction(state); break;
-		case 0x80: UnimplementedInstruction(state); break;
-		case 0x81: UnimplementedInstruction(state); break;
-		case 0x82: UnimplementedInstruction(state); break;
-		case 0x83: UnimplementedInstruction(state); break;
-		case 0x84: UnimplementedInstruction(state); break;
-		case 0x85: UnimplementedInstruction(state); break;
-		case 0x86: UnimplementedInstruction(state); break;
-		case 0x87: UnimplementedInstruction(state); break;
-		case 0x88: UnimplementedInstruction(state); break;
-		case 0x89: UnimplementedInstruction(state); break;
-		case 0x8a: UnimplementedInstruction(state); break;
-		case 0x8b: UnimplementedInstruction(state); break;
-		case 0x8c: UnimplementedInstruction(state); break;
-		case 0x8d: UnimplementedInstruction(state); break;
-		case 0x8e: UnimplementedInstruction(state); break;
-		case 0x8f: UnimplementedInstruction(state); break;
-		case 0x90: UnimplementedInstruction(state); break;
-		case 0x91: UnimplementedInstruction(state); break;
-		case 0x92: UnimplementedInstruction(state); break;
-		case 0x93: UnimplementedInstruction(state); break;
-		case 0x94: UnimplementedInstruction(state); break;
-		case 0x95: UnimplementedInstruction(state); break;
-		case 0x96: UnimplementedInstruction(state); break;
-		case 0x97: UnimplementedInstruction(state); break;
-		case 0x98: UnimplementedInstruction(state); break;
-		case 0x99: UnimplementedInstruction(state); break;
-		case 0x9a: UnimplementedInstruction(state); break;
-		case 0x9b: UnimplementedInstruction(state); break;
-		case 0x9c: UnimplementedInstruction(state); break;
-		case 0x9d: UnimplementedInstruction(state); break;
-		case 0x9e: UnimplementedInstruction(state); break;
-		case 0x9f: UnimplementedInstruction(state); break;
-		case 0xa0: UnimplementedInstruction(state); break;
-		case 0xa1: UnimplementedInstruction(state); break;
-		case 0xa2: UnimplementedInstruction(state); break;
-		case 0xa3: UnimplementedInstruction(state); break;
-		case 0xa4: UnimplementedInstruction(state); break;
-		case 0xa5: UnimplementedInstruction(state); break;
-		case 0xa6: UnimplementedInstruction(state); break;
-		case 0xa7: state->a = state->a & state->a; LogicFlagsA(state);	break; //ANA A
-		case 0xa8: UnimplementedInstruction(state); break;
-		case 0xa9: UnimplementedInstruction(state); break;
-		case 0xaa: UnimplementedInstruction(state); break;
-		case 0xab: UnimplementedInstruction(state); break;
-		case 0xac: UnimplementedInstruction(state); break;
-		case 0xad: UnimplementedInstruction(state); break;
-		case 0xae: UnimplementedInstruction(state); break;
-		case 0xaf: state->a = state->a ^ state->a; LogicFlagsA(state);	break; //XRA A
-		case 0xb0: UnimplementedInstruction(state); break;
-		case 0xb1: UnimplementedInstruction(state); break;
-		case 0xb2: UnimplementedInstruction(state); break;
-		case 0xb3: UnimplementedInstruction(state); break;
-		case 0xb4: UnimplementedInstruction(state); break;
-		case 0xb5: UnimplementedInstruction(state); break;
-		case 0xb6: UnimplementedInstruction(state); break;
-		case 0xb7: UnimplementedInstruction(state); break;
-		case 0xb8: UnimplementedInstruction(state); break;
-		case 0xb9: UnimplementedInstruction(state); break;
-		case 0xba: UnimplementedInstruction(state); break;
-		case 0xbb: UnimplementedInstruction(state); break;
-		case 0xbc: UnimplementedInstruction(state); break;
-		case 0xbd: UnimplementedInstruction(state); break;
-		case 0xbe: UnimplementedInstruction(state); break;
-		case 0xbf: UnimplementedInstruction(state); break;
-		case 0xc0: UnimplementedInstruction(state); break;
-		case 0xc1: 						//POP    B
-			{
-				state->c = state->memory[state->sp];
-				state->b = state->memory[state->sp+1];
-				state->sp += 2;
-			}
-			break;
-		case 0xc2: 						//JNZ address
-			if (0 == state->cc.z)
-				state->pc = (opcode[2] << 8) | opcode[1];
-			else
-				state->pc += 2;
-			break;
-		case 0xc3:						//JMP address
-			state->pc = (opcode[2] << 8) | opcode[1];
-			break;
-		case 0xc4: UnimplementedInstruction(state); break;
-		case 0xc5: 						//PUSH   B
-			{
-			state->memory[state->sp-1] = state->b;
-			state->memory[state->sp-2] = state->c;
-			state->sp = state->sp - 2;
-			}
-			break;
-		case 0xc6: 						//ADI    byte
-			{
-			uint16_t x = (uint16_t) state->a + (uint16_t) opcode[1];
-			state->cc.z = ((x & 0xff) == 0);
-			state->cc.s = (0x80 == (x & 0x80));
-			state->cc.p = parity((x&0xff), 8);
-			state->cc.cy = (x > 0xff);
-			state->a = (uint8_t) x;
-			state->pc++;
-			}
-			break;
-		case 0xc7: UnimplementedInstruction(state); break;
-		case 0xc8: UnimplementedInstruction(state); break;
-		case 0xc9: 						//RET
-			state->pc = state->memory[state->sp] | (state->memory[state->sp+1] << 8);
-			state->sp += 2;
-			break;
-		case 0xca: UnimplementedInstruction(state); break;
-		case 0xcb: UnimplementedInstruction(state); break;
-		case 0xcc: UnimplementedInstruction(state); break;
-		case 0xcd: 						//CALL adr
-			{
-			uint16_t	ret = state->pc+2;
-			state->memory[state->sp-1] = (ret >> 8) & 0xff;
-			state->memory[state->sp-2] = (ret & 0xff);
-			state->sp = state->sp - 2;
-			state->pc = (opcode[2] << 8) | opcode[1];
-			}
- 			break;
-		case 0xce: UnimplementedInstruction(state); break;
-		case 0xcf: UnimplementedInstruction(state); break;
-		case 0xd0: UnimplementedInstruction(state); break;
-		case 0xd1: 						//POP    D
-			{
-				state->e = state->memory[state->sp];
-				state->d = state->memory[state->sp+1];
-				state->sp += 2;
-			}
-			break;
-		case 0xd2: UnimplementedInstruction(state); break;
-		case 0xd3: 
-			//Don't know what to do here (yet)
-			state->pc++;
-			break;
-		case 0xd4: UnimplementedInstruction(state); break;
-		case 0xd5: 						//PUSH   D
-			{
-			state->memory[state->sp-1] = state->d;
-			state->memory[state->sp-2] = state->e;
-			state->sp = state->sp - 2;
-			}
-			break;
-		case 0xd6: UnimplementedInstruction(state); break;
-		case 0xd7: UnimplementedInstruction(state); break;
-		case 0xd8: UnimplementedInstruction(state); break;
-		case 0xd9: UnimplementedInstruction(state); break;
-		case 0xda: UnimplementedInstruction(state); break;
-		case 0xdb: UnimplementedInstruction(state); break;
-		case 0xdc: UnimplementedInstruction(state); break;
-		case 0xdd: UnimplementedInstruction(state); break;
-		case 0xde: UnimplementedInstruction(state); break;
-		case 0xdf: UnimplementedInstruction(state); break;
-		case 0xe0: UnimplementedInstruction(state); break;
-		case 0xe1: 					//POP    H
-			{
-				state->l = state->memory[state->sp];
-				state->h = state->memory[state->sp+1];
-				state->sp += 2;
-			}
-			break;
-		case 0xe2: UnimplementedInstruction(state); break;
-		case 0xe3: UnimplementedInstruction(state); break;
-		case 0xe4: UnimplementedInstruction(state); break;
-		case 0xe5: 						//PUSH   H
-			{
-			state->memory[state->sp-1] = state->h;
-			state->memory[state->sp-2] = state->l;
-			state->sp = state->sp - 2;
-			}
-			break;
-		case 0xe6: 						//ANI    byte
-			{
-			state->a = state->a & opcode[1];
-			LogicFlagsA(state);
-			state->pc++;
-			}
-			break;
-		case 0xe7: UnimplementedInstruction(state); break;
-		case 0xe8: UnimplementedInstruction(state); break;
-		case 0xe9: UnimplementedInstruction(state); break;
-		case 0xea: UnimplementedInstruction(state); break;
-		case 0xeb: 					//XCHG
-			{
-				uint8_t save1 = state->d;
-				uint8_t save2 = state->e;
-				state->d = state->h;
-				state->e = state->l;
-				state->h = save1;
-				state->l = save2;
-			}
-			break;
-		case 0xec: UnimplementedInstruction(state); break;
-		case 0xed: UnimplementedInstruction(state); break;
-		case 0xee: UnimplementedInstruction(state); break;
-		case 0xef: UnimplementedInstruction(state); break;
-		case 0xf0: UnimplementedInstruction(state); break;
-		case 0xf1: 					//POP PSW
-			{
-				state->a = state->memory[state->sp+1];
-				uint8_t psw = state->memory[state->sp];
-				state->cc.z  = (0x01 == (psw & 0x01));
-				state->cc.s  = (0x02 == (psw & 0x02));
-				state->cc.p  = (0x04 == (psw & 0x04));
-				state->cc.cy = (0x05 == (psw & 0x08));
-				state->cc.ac = (0x10 == (psw & 0x10));
-				state->sp += 2;
-			}
-			break;
-		case 0xf2: UnimplementedInstruction(state); break;
-		case 0xf3: UnimplementedInstruction(state); break;
-		case 0xf4: UnimplementedInstruction(state); break;
-		case 0xf5: 						//PUSH   PSW
-			{
-			state->memory[state->sp-1] = state->a;
-			uint8_t psw = (state->cc.z |
-							state->cc.s << 1 |
-							state->cc.p << 2 |
-							state->cc.cy << 3 |
-							state->cc.ac << 4 );
-			state->memory[state->sp-2] = psw;
-			state->sp = state->sp - 2;
-			}
-			break;
-		case 0xf6: UnimplementedInstruction(state); break;
-		case 0xf7: UnimplementedInstruction(state); break;
-		case 0xf8: UnimplementedInstruction(state); break;
-		case 0xf9: UnimplementedInstruction(state); break;
-		case 0xfa: UnimplementedInstruction(state); break;
-		case 0xfb: state->int_enable = 1;  break;	//EI
-		case 0xfc: UnimplementedInstruction(state); break;
-		case 0xfd: UnimplementedInstruction(state); break;
-		case 0xfe: 						//CPI  byte
-			{
-			uint8_t x = state->a - opcode[1];
-			state->cc.z = (x == 0);
-			state->cc.s = (0x80 == (x & 0x80));
-			state->cc.p = parity(x, 8);
-			state->cc.cy = (state->a < opcode[1]);
-			state->pc++;
-			}
-			break;
-		case 0xff: UnimplementedInstruction(state); break;
-	}
-	state->pc += 1;
+// reads a word from memory
+static inline uint16_t i8080_rw(i8080* const c, uint16_t addr) {
+    return c->read_byte(c->userdata, addr + 1) << 8 |
+        c->read_byte(c->userdata, addr);
+}
 
- }
+// writes a word to memory
+static inline void i8080_ww(i8080* const c, uint16_t addr, uint16_t val) {
+    c->write_byte(c->userdata, addr, val & 0xFF);
+    c->write_byte(c->userdata, addr + 1, val >> 8);
+}
 
-int Disassembler8080Op(unsigned char *codebuffer, int pc){
+// returns the next byte in memory (and updates the program counter)
+static inline uint8_t i8080_next_byte(i8080* const c) {
+    return i8080_rb(c, c->pc++);
+}
 
-    unsigned char *code = &codebuffer[pc];
-    int opbytes = 1;
-    printf ("%04x ", pc);
-    switch(*code){
-        case 0x00: printf("NOP\n"); break;
-        case 0x01: printf("LXI      B,#$%02x%02x \n", code[2], code[1]); opbytes=3; break;
-        case 0x02: printf("STAX     B\n"); break;
-        case 0x03: printf("INX      B\n"); break;
-        case 0x04: printf("INR      B\n"); break;
-        case 0x05: printf("DCR      B\n"); break;
-        case 0x06: printf("MVI      B,#$%02x \n", code[1]); opbytes=2; break;
-        case 0x07: printf("RLC\n"); break;
-        case 0x08: printf("NOP\n"); break;
-        case 0x09: printf("DAD      B\n"); break;
-        case 0x0a: printf("LDAX     B\n"); break;
-        case 0x0b: printf("DCX      B\n"); break;
-        case 0x0c: printf("INR      C\n"); break;
-        case 0x0d: printf("DCR    C\n"); break;
-		case 0x0e: printf("MVI    C,#$%02x \n", code[1]); opbytes = 2;	break;
-		case 0x0f: printf("RRC\n"); break;
-			
-		case 0x10: printf("NOP\n"); break;
-		case 0x11: printf("LXI    D,#$%02x%02x \n", code[2], code[1]); opbytes=3; break;
-		case 0x12: printf("STAX   D\n"); break;
-		case 0x13: printf("INX    D\n"); break;
-		case 0x14: printf("INR    D\n"); break;
-		case 0x15: printf("DCR    D\n"); break;
-		case 0x16: printf("MVI    D,#$%02x \n", code[1]); opbytes=2; break;
-		case 0x17: printf("RAL\n"); break;
-		case 0x18: printf("NOP\n"); break;
-		case 0x19: printf("DAD    D\n"); break;
-		case 0x1a: printf("LDAX   D\n"); break;
-		case 0x1b: printf("DCX    D\n"); break;
-		case 0x1c: printf("INR    E\n"); break;
-		case 0x1d: printf("DCR    E\n"); break;
-		case 0x1e: printf("MVI    E,#$%02x \n", code[1]); opbytes = 2; break;
-		case 0x1f: printf("RAR\n"); break;
-			
-		case 0x20: printf("NOP\n"); break;
-		case 0x21: printf("LXI    H,#$%02x%02x \n", code[2], code[1]); opbytes=3; break;
-		case 0x22: printf("SHLD   $%02x%02x \n", code[2], code[1]); opbytes=3; break;
-		case 0x23: printf("INX    H\n"); break;
-		case 0x24: printf("INR    H\n"); break;
-		case 0x25: printf("DCR    H\n"); break;
-		case 0x26: printf("MVI    H,#$%02x \n", code[1]); opbytes=2; break;
-		case 0x27: printf("DAA\n"); break;
-		case 0x28: printf("NOP\n"); break;
-		case 0x29: printf("DAD    H\n"); break;
-		case 0x2a: printf("LHLD   $%02x%02x \n", code[2], code[1]); opbytes=3; break;
-		case 0x2b: printf("DCX    H\n"); break;
-		case 0x2c: printf("INR    L\n"); break;
-		case 0x2d: printf("DCR    L\n"); break;
-		case 0x2e: printf("MVI    L,#$%02x \n", code[1]); opbytes = 2; break;
-		case 0x2f: printf("CMA\n"); break;
-			
-		case 0x30: printf("NOP\n"); break;
-		case 0x31: printf("LXI    SP,#$%02x%02x\n", code[2], code[1]); opbytes=3; break;
-		case 0x32: printf("STA    $%02x%02x\n", code[2], code[1]); opbytes=3; break;
-		case 0x33: printf("INX    SP\n"); break;
-		case 0x34: printf("INR    M\n"); break;
-		case 0x35: printf("DCR    M\n"); break;
-		case 0x36: printf("MVI    M,#$%02x\n", code[1]); opbytes=2; break;
-		case 0x37: printf("STC\n"); break;
-		case 0x38: printf("NOP\n"); break;
-		case 0x39: printf("DAD    SP\n"); break;
-		case 0x3a: printf("LDA    $%02x%02x\n", code[2], code[1]); opbytes=3; break;
-		case 0x3b: printf("DCX    SP\n"); break;
-		case 0x3c: printf("INR    A\n"); break;
-		case 0x3d: printf("DCR    A\n"); break;
-		case 0x3e: printf("MVI    A,#$%02x\n", code[1]); opbytes = 2; break;
-		case 0x3f: printf("CMC\n"); break;
-			
-		case 0x40: printf("MOV    B,B\n"); break;
-		case 0x41: printf("MOV    B,C\n"); break;
-		case 0x42: printf("MOV    B,D\n"); break;
-		case 0x43: printf("MOV    B,E\n"); break;
-		case 0x44: printf("MOV    B,H\n"); break;
-		case 0x45: printf("MOV    B,L\n"); break;
-		case 0x46: printf("MOV    B,M\n"); break;
-		case 0x47: printf("MOV    B,A\n"); break;
-		case 0x48: printf("MOV    C,B\n"); break;
-		case 0x49: printf("MOV    C,C\n"); break;
-		case 0x4a: printf("MOV    C,D\n"); break;
-		case 0x4b: printf("MOV    C,E\n"); break;
-		case 0x4c: printf("MOV    C,H\n"); break;
-		case 0x4d: printf("MOV    C,L\n"); break;
-		case 0x4e: printf("MOV    C,M\n"); break;
-		case 0x4f: printf("MOV    C,A\n"); break;
-		
-		case 0x50: printf("MOV    D,B\n"); break;
-		case 0x51: printf("MOV    D,C\n"); break;
-		case 0x52: printf("MOV    D,D\n"); break;
-		case 0x53: printf("MOV    D.E\n"); break;
-		case 0x54: printf("MOV    D,H\n"); break;
-		case 0x55: printf("MOV    D,L\n"); break;
-		case 0x56: printf("MOV    D,M\n"); break;
-		case 0x57: printf("MOV    D,A\n"); break;
-		case 0x58: printf("MOV    E,B\n"); break;
-		case 0x59: printf("MOV    E,C\n"); break;
-		case 0x5a: printf("MOV    E,D\n"); break;
-		case 0x5b: printf("MOV    E,E\n"); break;
-		case 0x5c: printf("MOV    E,H\n"); break;
-		case 0x5d: printf("MOV    E,L\n"); break;
-		case 0x5e: printf("MOV    E,M\n"); break;
-		case 0x5f: printf("MOV    E,A\n"); break;
+// returns the next word in memory (and updates the program counter)
+static inline uint16_t i8080_next_word(i8080* const c) {
+    uint16_t result = i8080_rw(c, c->pc);
+    c->pc += 2;
+    return result;
+}
 
-		case 0x60: printf("MOV    H,B\n"); break;
-		case 0x61: printf("MOV    H,C\n"); break;
-		case 0x62: printf("MOV    H,D\n"); break;
-		case 0x63: printf("MOV    H.E\n"); break;
-		case 0x64: printf("MOV    H,H\n"); break;
-		case 0x65: printf("MOV    H,L\n"); break;
-		case 0x66: printf("MOV    H,M\n"); break;
-		case 0x67: printf("MOV    H,A\n"); break;
-		case 0x68: printf("MOV    L,B\n"); break;
-		case 0x69: printf("MOV    L,C\n"); break;
-		case 0x6a: printf("MOV    L,D\n"); break;
-		case 0x6b: printf("MOV    L,E\n"); break;
-		case 0x6c: printf("MOV    L,H\n"); break;
-		case 0x6d: printf("MOV    L,L\n"); break;
-		case 0x6e: printf("MOV    L,M\n"); break;
-		case 0x6f: printf("MOV    L,A\n"); break;
+// paired registers helpers (setters and getters)
+static inline void i8080_set_bc(i8080* const c, uint16_t val) {
+    c->b = val >> 8;
+    c->c = val & 0xFF;
+}
 
-		case 0x70: printf("MOV    M,B\n"); break;
-		case 0x71: printf("MOV    M,C\n"); break;
-		case 0x72: printf("MOV    M,D\n"); break;
-		case 0x73: printf("MOV    M.E\n"); break;
-		case 0x74: printf("MOV    M,H\n"); break;
-		case 0x75: printf("MOV    M,L\n"); break;
-		case 0x76: printf("HLT\n");        break;
-		case 0x77: printf("MOV    M,A\n"); break;
-		case 0x78: printf("MOV    A,B\n"); break;
-		case 0x79: printf("MOV    A,C\n"); break;
-		case 0x7a: printf("MOV    A,D\n"); break;
-		case 0x7b: printf("MOV    A,E\n"); break;
-		case 0x7c: printf("MOV    A,H\n"); break;
-		case 0x7d: printf("MOV    A,L\n"); break;
-		case 0x7e: printf("MOV    A,M\n"); break;
-		case 0x7f: printf("MOV    A,A\n"); break;
+static inline void i8080_set_de(i8080* const c, uint16_t val) {
+    c->d = val >> 8;
+    c->e = val & 0xFF;
+}
 
-		case 0x80: printf("ADD    B\n"); break;
-		case 0x81: printf("ADD    C\n"); break;
-		case 0x82: printf("ADD    D\n"); break;
-		case 0x83: printf("ADD    E\n"); break;
-		case 0x84: printf("ADD    H\n"); break;
-		case 0x85: printf("ADD    L\n"); break;
-		case 0x86: printf("ADD    M\n"); break;
-		case 0x87: printf("ADD    A\n"); break;
-		case 0x88: printf("ADC    B\n"); break;
-		case 0x89: printf("ADC    C\n"); break;
-		case 0x8a: printf("ADC    D\n"); break;
-		case 0x8b: printf("ADC    E\n"); break;
-		case 0x8c: printf("ADC    H\n"); break;
-		case 0x8d: printf("ADC    L\n"); break;
-		case 0x8e: printf("ADC    M\n"); break;
-		case 0x8f: printf("ADC    A\n"); break;
+static inline void i8080_set_hl(i8080* const c, uint16_t val) {
+    c->h = val >> 8;
+    c->l = val & 0xFF;
+}
 
-		case 0x90: printf("SUB    B\n"); break;
-		case 0x91: printf("SUB    C\n"); break;
-		case 0x92: printf("SUB    D\n"); break;
-		case 0x93: printf("SUB    E\n"); break;
-		case 0x94: printf("SUB    H\n"); break;
-		case 0x95: printf("SUB    L\n"); break;
-		case 0x96: printf("SUB    M\n"); break;
-		case 0x97: printf("SUB    A\n"); break;
-		case 0x98: printf("SBB    B\n"); break;
-		case 0x99: printf("SBB    C\n"); break;
-		case 0x9a: printf("SBB    D\n"); break;
-		case 0x9b: printf("SBB    E\n"); break;
-		case 0x9c: printf("SBB    H\n"); break;
-		case 0x9d: printf("SBB    L\n"); break;
-		case 0x9e: printf("SBB    M\n"); break;
-		case 0x9f: printf("SBB    A\n"); break;
+static inline uint16_t i8080_get_bc(i8080* const c) {
+    return (c->b << 8) | c->c;
+}
 
-		case 0xa0: printf("ANA    B\n"); break;
-		case 0xa1: printf("ANA    C\n"); break;
-		case 0xa2: printf("ANA    D\n"); break;
-		case 0xa3: printf("ANA    E\n"); break;
-		case 0xa4: printf("ANA    H\n"); break;
-		case 0xa5: printf("ANA    L\n"); break;
-		case 0xa6: printf("ANA    M\n"); break;
-		case 0xa7: printf("ANA    A\n"); break;
-		case 0xa8: printf("XRA    B\n"); break;
-		case 0xa9: printf("XRA    C\n"); break;
-		case 0xaa: printf("XRA    D\n"); break;
-		case 0xab: printf("XRA    E\n"); break;
-		case 0xac: printf("XRA    H\n"); break;
-		case 0xad: printf("XRA    L\n"); break;
-		case 0xae: printf("XRA    M\n"); break;
-		case 0xaf: printf("XRA    A\n"); break;
+static inline uint16_t i8080_get_de(i8080* const c) {
+    return (c->d << 8) | c->e;
+}
 
-		case 0xb0: printf("ORA    B\n"); break;
-		case 0xb1: printf("ORA    C\n"); break;
-		case 0xb2: printf("ORA    D\n"); break;
-		case 0xb3: printf("ORA    E\n"); break;
-		case 0xb4: printf("ORA    H\n"); break;
-		case 0xb5: printf("ORA    L\n"); break;
-		case 0xb6: printf("ORA    M\n"); break;
-		case 0xb7: printf("ORA    A\n"); break;
-		case 0xb8: printf("CMP    B\n"); break;
-		case 0xb9: printf("CMP    C\n"); break;
-		case 0xba: printf("CMP    D\n"); break;
-		case 0xbb: printf("CMP    E\n"); break;
-		case 0xbc: printf("CMP    H\n"); break;
-		case 0xbd: printf("CMP    L\n"); break;
-		case 0xbe: printf("CMP    M\n"); break;
-		case 0xbf: printf("CMP    A\n"); break;
+static inline uint16_t i8080_get_hl(i8080* const c) {
+    return (c->h << 8) | c->l;
+}
 
-		case 0xc0: printf("RNZ\n"); break;
-		case 0xc1: printf("POP    B\n"); break;
-		case 0xc2: printf("JNZ    $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xc3: printf("JMP    $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xc4: printf("CNZ    $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xc5: printf("PUSH   B\n"); break;
-		case 0xc6: printf("ADI    #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xc7: printf("RST    0\n"); break;
-		case 0xc8: printf("RZ\n"); break;
-		case 0xc9: printf("RET\n"); break;
-		case 0xca: printf("JZ     $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xcb: printf("JMP    $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xcc: printf("CZ     $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xcd: printf("CALL   $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xce: printf("ACI    #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xcf: printf("RST    1\n"); break;
+// stack helpers
 
-		case 0xd0: printf("RNC\n"); break;
-		case 0xd1: printf("POP    D\n"); break;
-		case 0xd2: printf("JNC    $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xd3: printf("OUT    #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xd4: printf("CNC    $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xd5: printf("PUSH   D\n"); break;
-		case 0xd6: printf("SUI    #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xd7: printf("RST    2\n"); break;
-		case 0xd8: printf("RC\n");  break;
-		case 0xd9: printf("RET\n"); break;
-		case 0xda: printf("JC     $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xdb: printf("IN     #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xdc: printf("CC     $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xdd: printf("CALL   $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xde: printf("SBI    #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xdf: printf("RST    3\n"); break;
+// pushes a value into the stack and updates the stack pointer
+static inline void i8080_push_stack(i8080* const c, uint16_t val) {
+    c->sp -= 2;
+    i8080_ww(c, c->sp, val);
+}
 
-		case 0xe0: printf("RPO\n"); break;
-		case 0xe1: printf("POP    H\n"); break;
-		case 0xe2: printf("JPO    $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xe3: printf("XTHL\n");break;
-		case 0xe4: printf("CPO    $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xe5: printf("PUSH   H\n"); break;
-		case 0xe6: printf("ANI    #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xe7: printf("RST    4\n"); break;
-		case 0xe8: printf("RPE\n"); break;
-		case 0xe9: printf("PCHL\n");break;
-		case 0xea: printf("JPE    $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xeb: printf("XCHG\n"); break;
-		case 0xec: printf("CPE     $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xed: printf("CALL   $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xee: printf("XRI    #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xef: printf("RST    5\n"); break;
+// pops a value from the stack and updates the stack pointer
+static inline uint16_t i8080_pop_stack(i8080* const c) {
+    uint16_t val = i8080_rw(c, c->sp);
+    c->sp += 2;
+    return val;
+}
 
-		case 0xf0: printf("RP\n");  break;
-		case 0xf1: printf("POP    PSW\n"); break;
-		case 0xf2: printf("JP     $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xf3: printf("DI\n");  break;
-		case 0xf4: printf("CP     $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xf5: printf("PUSH   PSW\n"); break;
-		case 0xf6: printf("ORI    #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xf7: printf("RST    6\n"); break;
-		case 0xf8: printf("RM\n");  break;
-		case 0xf9: printf("SPHL\n");break;
-		case 0xfa: printf("JM     $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xfb: printf("EI\n");  break;
-		case 0xfc: printf("CM     $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xfd: printf("CALL   $%02x%02x\n",code[2],code[1]); opbytes = 3; break;
-		case 0xfe: printf("CPI    #$%02x\n",code[1]); opbytes = 2; break;
-		case 0xff: printf("RST    7\n"); break;
+// opcodes
+
+// returns the parity of byte: 0 if number of 1 bits in `val` is odd, else 1
+static inline bool parity(uint8_t val) {
+    uint8_t nb_one_bits = 0;
+    for (int i = 0; i < 8; i++) {
+        nb_one_bits += ((val >> i) & 1);
     }
 
-    return opbytes;
+    return (nb_one_bits & 1) == 0;
 }
 
-int main( int argc, char**argv){
-    FILE *f = fopen(argv[1], "rb");
-	if (f == NULL){
-		printf("error: couldn't open file %s\n", argv[1]);
-	}
-	fseek(f, 0L, SEEK_END);
-	int fsize = ftell(f);
-	fseek(f, 0L, SEEK_SET);
+// returns if there was a carry between bit "bit_no" and "bit_no - 1" when
+// executing "a + b + cy"
+static inline bool carry(int bit_no, uint8_t a, uint8_t b, bool cy) {
+    int16_t result = a + b + cy;
+    int16_t carry = result ^ a ^ b;
+    return carry & (1 << bit_no);
+}
 
-	unsigned char *buffer = malloc(fsize);
-	fread(buffer, fsize, 1 , f);
-	fclose(f);
+// adds a value (+ an optional carry flag) to a register
+static inline void i8080_add(
+    i8080* const c, uint8_t* const reg, uint8_t val, bool cy) {
+    uint8_t result = *reg + val + cy;
+    c->cf = carry(8, *reg, val, cy);
+    c->hf = carry(4, *reg, val, cy);
+    SET_ZSP(c, result);
+    *reg = result;
+}
 
-	int pc = 0;
+// substracts a byte (+ an optional carry flag) from a register
+// see https://stackoverflow.com/a/8037485
+static inline void i8080_sub(
+    i8080* const c, uint8_t* const reg, uint8_t val, bool cy) {
+    i8080_add(c, reg, ~val, !cy);
+    c->cf = !c->cf;
+}
 
-	while (pc< fsize){
-		pc += Disassembler8080Op(buffer,pc);
-	}
-	return 0;
-	}
+// adds a word to HL
+static inline void i8080_dad(i8080* const c, uint16_t val) {
+    c->cf = ((i8080_get_hl(c) + val) >> 16) & 1;
+    i8080_set_hl(c, i8080_get_hl(c) + val);
+}
+
+// increments a byte
+static inline uint8_t i8080_inr(i8080* const c, uint8_t val) {
+    uint8_t result = val + 1;
+    c->hf = (result & 0xF) == 0;
+    SET_ZSP(c, result);
+    return result;
+}
+
+// decrements a byte
+static inline uint8_t i8080_dcr(i8080* const c, uint8_t val) {
+    uint8_t result = val - 1;
+    c->hf = !((result & 0xF) == 0xF);
+    SET_ZSP(c, result);
+    return result;
+}
+
+// executes a logic "and" between register A and a byte, then stores the
+// result in register A
+static inline void i8080_ana(i8080* const c, uint8_t val) {
+    uint8_t result = c->a & val;
+    c->cf = 0;
+    c->hf = ((c->a | val) & 0x08) != 0;
+    SET_ZSP(c, result);
+    c->a = result;
+}
+
+// executes a logic "xor" between register A and a byte, then stores the
+// result in register A
+static inline void i8080_xra(i8080* const c, uint8_t val) {
+    c->a ^= val;
+    c->cf = 0;
+    c->hf = 0;
+    SET_ZSP(c, c->a);
+}
+
+// executes a logic "or" between register A and a byte, then stores the
+// result in register A
+static inline void i8080_ora(i8080* const c, uint8_t val) {
+    c->a |= val;
+    c->cf = 0;
+    c->hf = 0;
+    SET_ZSP(c, c->a);
+}
+
+// compares the register A to another byte
+static inline void i8080_cmp(i8080* const c, uint8_t val) {
+    int16_t result = c->a - val;
+    c->cf = result >> 8;
+    c->hf = ~(c->a ^ result ^ val) & 0x10;
+    SET_ZSP(c, result & 0xFF);
+}
+
+// sets the program counter to a given address
+static inline void i8080_jmp(i8080* const c, uint16_t addr) {
+    c->pc = addr;
+}
+
+// jumps to next address pointed by the next word in memory if a condition
+// is met
+static inline void i8080_cond_jmp(i8080* const c, bool condition) {
+    uint16_t addr = i8080_next_word(c);
+    if (condition) {
+        c->pc = addr;
+    }
+}
+
+// pushes the current pc to the stack, then jumps to an address
+static inline void i8080_call(i8080* const c, uint16_t addr) {
+    i8080_push_stack(c, c->pc);
+    i8080_jmp(c, addr);
+}
+
+// calls to next word in memory if a condition is met
+static inline void i8080_cond_call(i8080* const c, bool condition) {
+    uint16_t addr = i8080_next_word(c);
+    if (condition) {
+        i8080_call(c, addr);
+        c->cyc += 6;
+    }
+}
+
+// returns from subroutine
+static inline void i8080_ret(i8080* const c) {
+    c->pc = i8080_pop_stack(c);
+}
+
+// returns from subroutine if a condition is met
+static inline void i8080_cond_ret(i8080* const c, bool condition) {
+    if (condition) {
+        i8080_ret(c);
+        c->cyc += 6;
+    }
+}
+
+// pushes register A and the flags into the stack
+static inline void i8080_push_psw(i8080* const c) {
+    // note: bit 3 and 5 are always 0
+    uint8_t psw = 0;
+    psw |= c->sf << 7;
+    psw |= c->zf << 6;
+    psw |= c->hf << 4;
+    psw |= c->pf << 2;
+    psw |= 1 << 1; // bit 1 is always 1
+    psw |= c->cf << 0;
+    i8080_push_stack(c, c->a << 8 | psw);
+}
+
+// pops register A and the flags from the stack
+static inline void i8080_pop_psw(i8080* const c) {
+    uint16_t af = i8080_pop_stack(c);
+    c->a = af >> 8;
+    uint8_t psw = af & 0xFF;
+
+    c->sf = (psw >> 7) & 1;
+    c->zf = (psw >> 6) & 1;
+    c->hf = (psw >> 4) & 1;
+    c->pf = (psw >> 2) & 1;
+    c->cf = (psw >> 0) & 1;
+}
+
+// rotate register A left
+static inline void i8080_rlc(i8080* const c) {
+    c->cf = c->a >> 7;
+    c->a = (c->a << 1) | c->cf;
+}
+
+// rotate register A right
+static inline void i8080_rrc(i8080* const c) {
+    c->cf = c->a & 1;
+    c->a = (c->a >> 1) | (c->cf << 7);
+}
+
+// rotate register A left with the carry flag
+static inline void i8080_ral(i8080* const c) {
+    bool cy = c->cf;
+    c->cf = c->a >> 7;
+    c->a = (c->a << 1) | cy;
+}
+
+// rotate register A right with the carry flag
+static inline void i8080_rar(i8080* const c) {
+    bool cy = c->cf;
+    c->cf = c->a & 1;
+    c->a = (c->a >> 1) | (cy << 7);
+}
+
+// Decimal Adjust Accumulator: the eight-bit number in register A is adjusted
+// to form two four-bit binary-coded-decimal digits.
+// For example, if A=$2B and DAA is executed, A becomes $31.
+static inline void i8080_daa(i8080* const c) {
+    bool cy = c->cf;
+    uint8_t correction = 0;
+
+    uint8_t lsb = c->a & 0x0F;
+    uint8_t msb = c->a >> 4;
+
+    if (c->hf || lsb > 9) {
+        correction += 0x06;
+    }
+
+    if (c->cf || msb > 9 || (msb >= 9 && lsb > 9)) {
+        correction += 0x60;
+        cy = 1;
+    }
+
+    i8080_add(c, &c->a, correction, 0);
+    c->cf = cy;
+}
+
+// switches the value of registers DE and HL
+static inline void i8080_xchg(i8080* const c) {
+    uint16_t de = i8080_get_de(c);
+    i8080_set_de(c, i8080_get_hl(c));
+    i8080_set_hl(c, de);
+}
+
+// switches the value of a word at (sp) and HL
+static inline void i8080_xthl(i8080* const c) {
+    uint16_t val = i8080_rw(c, c->sp);
+    i8080_ww(c, c->sp, i8080_get_hl(c));
+    i8080_set_hl(c, val);
+}
+
+// executes one opcode
+static inline void i8080_execute(i8080* const c, uint8_t opcode) {
+    c->cyc += OPCODES_CYCLES[opcode];
+
+    // when DI is executed, interrupts won't be serviced
+    // until the end of next instruction:
+    if (c->interrupt_delay > 0) {
+        c->interrupt_delay -= 1;
+    }
+
+    switch (opcode) {
+    case 0x7F: c->a = c->a; break; // MOV A,A
+    case 0x78: c->a = c->b; break; // MOV A,B
+    case 0x79: c->a = c->c; break; // MOV A,C
+    case 0x7A: c->a = c->d; break; // MOV A,D
+    case 0x7B: c->a = c->e; break; // MOV A,E
+    case 0x7C: c->a = c->h; break; // MOV A,H
+    case 0x7D: c->a = c->l; break; // MOV A,L
+    case 0x7E: c->a = i8080_rb(c, i8080_get_hl(c)); break; // MOV A,M
+
+    case 0x0A: c->a = i8080_rb(c, i8080_get_bc(c)); break; // LDAX B
+    case 0x1A: c->a = i8080_rb(c, i8080_get_de(c)); break; // LDAX D
+    case 0x3A: c->a = i8080_rb(c, i8080_next_word(c)); break; // LDA word
+
+    case 0x47: c->b = c->a; break; // MOV B,A
+    case 0x40: c->b = c->b; break; // MOV B,B
+    case 0x41: c->b = c->c; break; // MOV B,C
+    case 0x42: c->b = c->d; break; // MOV B,D
+    case 0x43: c->b = c->e; break; // MOV B,E
+    case 0x44: c->b = c->h; break; // MOV B,H
+    case 0x45: c->b = c->l; break; // MOV B,L
+    case 0x46: c->b = i8080_rb(c, i8080_get_hl(c)); break; // MOV B,M
+
+    case 0x4F: c->c = c->a; break; // MOV C,A
+    case 0x48: c->c = c->b; break; // MOV C,B
+    case 0x49: c->c = c->c; break; // MOV C,C
+    case 0x4A: c->c = c->d; break; // MOV C,D
+    case 0x4B: c->c = c->e; break; // MOV C,E
+    case 0x4C: c->c = c->h; break; // MOV C,H
+    case 0x4D: c->c = c->l; break; // MOV C,L
+    case 0x4E: c->c = i8080_rb(c, i8080_get_hl(c)); break; // MOV C,M
+
+    case 0x57: c->d = c->a; break; // MOV D,A
+    case 0x50: c->d = c->b; break; // MOV D,B
+    case 0x51: c->d = c->c; break; // MOV D,C
+    case 0x52: c->d = c->d; break; // MOV D,D
+    case 0x53: c->d = c->e; break; // MOV D,E
+    case 0x54: c->d = c->h; break; // MOV D,H
+    case 0x55: c->d = c->l; break; // MOV D,L
+    case 0x56: c->d = i8080_rb(c, i8080_get_hl(c)); break; // MOV D,M
+
+    case 0x5F: c->e = c->a; break; // MOV E,A
+    case 0x58: c->e = c->b; break; // MOV E,B
+    case 0x59: c->e = c->c; break; // MOV E,C
+    case 0x5A: c->e = c->d; break; // MOV E,D
+    case 0x5B: c->e = c->e; break; // MOV E,E
+    case 0x5C: c->e = c->h; break; // MOV E,H
+    case 0x5D: c->e = c->l; break; // MOV E,L
+    case 0x5E: c->e = i8080_rb(c, i8080_get_hl(c)); break; // MOV E,M
+
+    case 0x67: c->h = c->a; break; // MOV H,A
+    case 0x60: c->h = c->b; break; // MOV H,B
+    case 0x61: c->h = c->c; break; // MOV H,C
+    case 0x62: c->h = c->d; break; // MOV H,D
+    case 0x63: c->h = c->e; break; // MOV H,E
+    case 0x64: c->h = c->h; break; // MOV H,H
+    case 0x65: c->h = c->l; break; // MOV H,L
+    case 0x66: c->h = i8080_rb(c, i8080_get_hl(c)); break; // MOV H,M
+
+    case 0x6F: c->l = c->a; break; // MOV L,A
+    case 0x68: c->l = c->b; break; // MOV L,B
+    case 0x69: c->l = c->c; break; // MOV L,C
+    case 0x6A: c->l = c->d; break; // MOV L,D
+    case 0x6B: c->l = c->e; break; // MOV L,E
+    case 0x6C: c->l = c->h; break; // MOV L,H
+    case 0x6D: c->l = c->l; break; // MOV L,L
+    case 0x6E: c->l = i8080_rb(c, i8080_get_hl(c)); break; // MOV L,M
+
+    case 0x77: i8080_wb(c, i8080_get_hl(c), c->a); break; // MOV M,A
+    case 0x70: i8080_wb(c, i8080_get_hl(c), c->b); break; // MOV M,B
+    case 0x71: i8080_wb(c, i8080_get_hl(c), c->c); break; // MOV M,C
+    case 0x72: i8080_wb(c, i8080_get_hl(c), c->d); break; // MOV M,D
+    case 0x73: i8080_wb(c, i8080_get_hl(c), c->e); break; // MOV M,E
+    case 0x74: i8080_wb(c, i8080_get_hl(c), c->h); break; // MOV M,H
+    case 0x75: i8080_wb(c, i8080_get_hl(c), c->l); break; // MOV M,L
+
+    case 0x3E: c->a = i8080_next_byte(c); break; // MVI A,byte
+    case 0x06: c->b = i8080_next_byte(c); break; // MVI B,byte
+    case 0x0E: c->c = i8080_next_byte(c); break; // MVI C,byte
+    case 0x16: c->d = i8080_next_byte(c); break; // MVI D,byte
+    case 0x1E: c->e = i8080_next_byte(c); break; // MVI E,byte
+    case 0x26: c->h = i8080_next_byte(c); break; // MVI H,byte
+    case 0x2E: c->l = i8080_next_byte(c); break; // MVI L,byte
+    case 0x36:
+        i8080_wb(c, i8080_get_hl(c), i8080_next_byte(c));
+        break; // MVI M,byte
+
+    case 0x02: i8080_wb(c, i8080_get_bc(c), c->a); break; // STAX B
+    case 0x12: i8080_wb(c, i8080_get_de(c), c->a); break; // STAX D
+    case 0x32: i8080_wb(c, i8080_next_word(c), c->a); break; // STA word
+
+    case 0x01: i8080_set_bc(c, i8080_next_word(c)); break; // LXI B,word
+    case 0x11: i8080_set_de(c, i8080_next_word(c)); break; // LXI D,word
+    case 0x21: i8080_set_hl(c, i8080_next_word(c)); break; // LXI H,word
+    case 0x31: c->sp = i8080_next_word(c); break; // LXI SP,word
+    case 0x2A: i8080_set_hl(c, i8080_rw(c, i8080_next_word(c))); break; // LHLD
+    case 0x22: i8080_ww(c, i8080_next_word(c), i8080_get_hl(c)); break; // SHLD
+    case 0xF9: c->sp = i8080_get_hl(c); break; // SPHL
+
+    case 0xEB: i8080_xchg(c); break; // XCHG
+    case 0xE3: i8080_xthl(c); break; // XTHL
+
+    case 0x87: i8080_add(c, &c->a, c->a, 0); break; // ADD A
+    case 0x80: i8080_add(c, &c->a, c->b, 0); break; // ADD B
+    case 0x81: i8080_add(c, &c->a, c->c, 0); break; // ADD C
+    case 0x82: i8080_add(c, &c->a, c->d, 0); break; // ADD D
+    case 0x83: i8080_add(c, &c->a, c->e, 0); break; // ADD E
+    case 0x84: i8080_add(c, &c->a, c->h, 0); break; // ADD H
+    case 0x85: i8080_add(c, &c->a, c->l, 0); break; // ADD L
+    case 0x86:
+        i8080_add(c, &c->a, i8080_rb(c, i8080_get_hl(c)), 0);
+        break; // ADD M
+    case 0xC6: i8080_add(c, &c->a, i8080_next_byte(c), 0); break; // ADI byte
+
+    case 0x8F: i8080_add(c, &c->a, c->a, c->cf); break; // ADC A
+    case 0x88: i8080_add(c, &c->a, c->b, c->cf); break; // ADC B
+    case 0x89: i8080_add(c, &c->a, c->c, c->cf); break; // ADC C
+    case 0x8A: i8080_add(c, &c->a, c->d, c->cf); break; // ADC D
+    case 0x8B: i8080_add(c, &c->a, c->e, c->cf); break; // ADC E
+    case 0x8C: i8080_add(c, &c->a, c->h, c->cf); break; // ADC H
+    case 0x8D: i8080_add(c, &c->a, c->l, c->cf); break; // ADC L
+    case 0x8E:
+        i8080_add(c, &c->a, i8080_rb(c, i8080_get_hl(c)), c->cf);
+        break; // ADC M
+    case 0xCE: i8080_add(c, &c->a, i8080_next_byte(c), c->cf); break; // ACI byte
+
+    case 0x97: i8080_sub(c, &c->a, c->a, 0); break; // SUB A
+    case 0x90: i8080_sub(c, &c->a, c->b, 0); break; // SUB B
+    case 0x91: i8080_sub(c, &c->a, c->c, 0); break; // SUB C
+    case 0x92: i8080_sub(c, &c->a, c->d, 0); break; // SUB D
+    case 0x93: i8080_sub(c, &c->a, c->e, 0); break; // SUB E
+    case 0x94: i8080_sub(c, &c->a, c->h, 0); break; // SUB H
+    case 0x95: i8080_sub(c, &c->a, c->l, 0); break; // SUB L
+    case 0x96:
+        i8080_sub(c, &c->a, i8080_rb(c, i8080_get_hl(c)), 0);
+        break; // SUB M
+    case 0xD6: i8080_sub(c, &c->a, i8080_next_byte(c), 0); break; // SUI byte
+
+    case 0x9F: i8080_sub(c, &c->a, c->a, c->cf); break; // SBB A
+    case 0x98: i8080_sub(c, &c->a, c->b, c->cf); break; // SBB B
+    case 0x99: i8080_sub(c, &c->a, c->c, c->cf); break; // SBB C
+    case 0x9A: i8080_sub(c, &c->a, c->d, c->cf); break; // SBB D
+    case 0x9B: i8080_sub(c, &c->a, c->e, c->cf); break; // SBB E
+    case 0x9C: i8080_sub(c, &c->a, c->h, c->cf); break; // SBB H
+    case 0x9D: i8080_sub(c, &c->a, c->l, c->cf); break; // SBB L
+    case 0x9E:
+        i8080_sub(c, &c->a, i8080_rb(c, i8080_get_hl(c)), c->cf);
+        break; // SBB M
+    case 0xDE: i8080_sub(c, &c->a, i8080_next_byte(c), c->cf); break; // SBI byte
+
+    case 0x09: i8080_dad(c, i8080_get_bc(c)); break; // DAD B
+    case 0x19: i8080_dad(c, i8080_get_de(c)); break; // DAD D
+    case 0x29: i8080_dad(c, i8080_get_hl(c)); break; // DAD H
+    case 0x39: i8080_dad(c, c->sp); break; // DAD SP
+
+    case 0xF3: c->iff = 0; break; // DI
+    case 0xFB:
+        c->iff = 1;
+        c->interrupt_delay = 1;
+        break; // EI
+    case 0x00: break; // NOP
+    case 0x76: c->halted = 1; break; // HLT
+
+    case 0x3C: c->a = i8080_inr(c, c->a); break; // INR A
+    case 0x04: c->b = i8080_inr(c, c->b); break; // INR B
+    case 0x0C: c->c = i8080_inr(c, c->c); break; // INR C
+    case 0x14: c->d = i8080_inr(c, c->d); break; // INR D
+    case 0x1C: c->e = i8080_inr(c, c->e); break; // INR E
+    case 0x24: c->h = i8080_inr(c, c->h); break; // INR H
+    case 0x2C: c->l = i8080_inr(c, c->l); break; // INR L
+    case 0x34:
+        i8080_wb(c, i8080_get_hl(c), i8080_inr(c, i8080_rb(c, i8080_get_hl(c))));
+        break; // INR M
+
+    case 0x3D: c->a = i8080_dcr(c, c->a); break; // DCR A
+    case 0x05: c->b = i8080_dcr(c, c->b); break; // DCR B
+    case 0x0D: c->c = i8080_dcr(c, c->c); break; // DCR C
+    case 0x15: c->d = i8080_dcr(c, c->d); break; // DCR D
+    case 0x1D: c->e = i8080_dcr(c, c->e); break; // DCR E
+    case 0x25: c->h = i8080_dcr(c, c->h); break; // DCR H
+    case 0x2D: c->l = i8080_dcr(c, c->l); break; // DCR L
+    case 0x35:
+        i8080_wb(c, i8080_get_hl(c), i8080_dcr(c, i8080_rb(c, i8080_get_hl(c))));
+        break; // DCR M
+
+    case 0x03: i8080_set_bc(c, i8080_get_bc(c) + 1); break; // INX B
+    case 0x13: i8080_set_de(c, i8080_get_de(c) + 1); break; // INX D
+    case 0x23: i8080_set_hl(c, i8080_get_hl(c) + 1); break; // INX H
+    case 0x33: c->sp += 1; break; // INX SP
+
+    case 0x0B: i8080_set_bc(c, i8080_get_bc(c) - 1); break; // DCX B
+    case 0x1B: i8080_set_de(c, i8080_get_de(c) - 1); break; // DCX D
+    case 0x2B: i8080_set_hl(c, i8080_get_hl(c) - 1); break; // DCX H
+    case 0x3B: c->sp -= 1; break; // DCX SP
+
+    case 0x27: i8080_daa(c); break; // DAA
+    case 0x2F: c->a = ~c->a; break; // CMA
+    case 0x37: c->cf = 1; break; // STC
+    case 0x3F: c->cf = !c->cf; break; // CMC
+
+    case 0x07: i8080_rlc(c); break; // RLC (rotate left)
+    case 0x0F: i8080_rrc(c); break; // RRC (rotate right)
+    case 0x17: i8080_ral(c); break; // RAL
+    case 0x1F: i8080_rar(c); break; // RAR
+
+    case 0xA7: i8080_ana(c, c->a); break; // ANA A
+    case 0xA0: i8080_ana(c, c->b); break; // ANA B
+    case 0xA1: i8080_ana(c, c->c); break; // ANA C
+    case 0xA2: i8080_ana(c, c->d); break; // ANA D
+    case 0xA3: i8080_ana(c, c->e); break; // ANA E
+    case 0xA4: i8080_ana(c, c->h); break; // ANA H
+    case 0xA5: i8080_ana(c, c->l); break; // ANA L
+    case 0xA6: i8080_ana(c, i8080_rb(c, i8080_get_hl(c))); break; // ANA M
+    case 0xE6: i8080_ana(c, i8080_next_byte(c)); break; // ANI byte
+
+    case 0xAF: i8080_xra(c, c->a); break; // XRA A
+    case 0xA8: i8080_xra(c, c->b); break; // XRA B
+    case 0xA9: i8080_xra(c, c->c); break; // XRA C
+    case 0xAA: i8080_xra(c, c->d); break; // XRA D
+    case 0xAB: i8080_xra(c, c->e); break; // XRA E
+    case 0xAC: i8080_xra(c, c->h); break; // XRA H
+    case 0xAD: i8080_xra(c, c->l); break; // XRA L
+    case 0xAE: i8080_xra(c, i8080_rb(c, i8080_get_hl(c))); break; // XRA M
+    case 0xEE: i8080_xra(c, i8080_next_byte(c)); break; // XRI byte
+
+    case 0xB7: i8080_ora(c, c->a); break; // ORA A
+    case 0xB0: i8080_ora(c, c->b); break; // ORA B
+    case 0xB1: i8080_ora(c, c->c); break; // ORA C
+    case 0xB2: i8080_ora(c, c->d); break; // ORA D
+    case 0xB3: i8080_ora(c, c->e); break; // ORA E
+    case 0xB4: i8080_ora(c, c->h); break; // ORA H
+    case 0xB5: i8080_ora(c, c->l); break; // ORA L
+    case 0xB6: i8080_ora(c, i8080_rb(c, i8080_get_hl(c))); break; // ORA M
+    case 0xF6: i8080_ora(c, i8080_next_byte(c)); break; // ORI byte
+
+    case 0xBF: i8080_cmp(c, c->a); break; // CMP A
+    case 0xB8: i8080_cmp(c, c->b); break; // CMP B
+    case 0xB9: i8080_cmp(c, c->c); break; // CMP C
+    case 0xBA: i8080_cmp(c, c->d); break; // CMP D
+    case 0xBB: i8080_cmp(c, c->e); break; // CMP E
+    case 0xBC: i8080_cmp(c, c->h); break; // CMP H
+    case 0xBD: i8080_cmp(c, c->l); break; // CMP L
+    case 0xBE: i8080_cmp(c, i8080_rb(c, i8080_get_hl(c))); break; // CMP M
+    case 0xFE: i8080_cmp(c, i8080_next_byte(c)); break; // CPI byte
+
+    case 0xC3: i8080_jmp(c, i8080_next_word(c)); break; // JMP
+    case 0xC2: i8080_cond_jmp(c, c->zf == 0); break; // JNZ
+    case 0xCA: i8080_cond_jmp(c, c->zf == 1); break; // JZ
+    case 0xD2: i8080_cond_jmp(c, c->cf == 0); break; // JNC
+    case 0xDA: i8080_cond_jmp(c, c->cf == 1); break; // JC
+    case 0xE2: i8080_cond_jmp(c, c->pf == 0); break; // JPO
+    case 0xEA: i8080_cond_jmp(c, c->pf == 1); break; // JPE
+    case 0xF2: i8080_cond_jmp(c, c->sf == 0); break; // JP
+    case 0xFA: i8080_cond_jmp(c, c->sf == 1); break; // JM
+
+    case 0xE9: c->pc = i8080_get_hl(c); break; // PCHL
+    case 0xCD: i8080_call(c, i8080_next_word(c)); break; // CALL
+
+    case 0xC4: i8080_cond_call(c, c->zf == 0); break; // CNZ
+    case 0xCC: i8080_cond_call(c, c->zf == 1); break; // CZ
+    case 0xD4: i8080_cond_call(c, c->cf == 0); break; // CNC
+    case 0xDC: i8080_cond_call(c, c->cf == 1); break; // CC
+    case 0xE4: i8080_cond_call(c, c->pf == 0); break; // CPO
+    case 0xEC: i8080_cond_call(c, c->pf == 1); break; // CPE
+    case 0xF4: i8080_cond_call(c, c->sf == 0); break; // CP
+    case 0xFC: i8080_cond_call(c, c->sf == 1); break; // CM
+
+    case 0xC9: i8080_ret(c); break; // RET
+    case 0xC0: i8080_cond_ret(c, c->zf == 0); break; // RNZ
+    case 0xC8: i8080_cond_ret(c, c->zf == 1); break; // RZ
+    case 0xD0: i8080_cond_ret(c, c->cf == 0); break; // RNC
+    case 0xD8: i8080_cond_ret(c, c->cf == 1); break; // RC
+    case 0xE0: i8080_cond_ret(c, c->pf == 0); break; // RPO
+    case 0xE8: i8080_cond_ret(c, c->pf == 1); break; // RPE
+    case 0xF0: i8080_cond_ret(c, c->sf == 0); break; // RP
+    case 0xF8: i8080_cond_ret(c, c->sf == 1); break; // RM
+
+    case 0xC7: i8080_call(c, 0x00); break; // RST 0
+    case 0xCF: i8080_call(c, 0x08); break; // RST 1
+    case 0xD7: i8080_call(c, 0x10); break; // RST 2
+    case 0xDF: i8080_call(c, 0x18); break; // RST 3
+    case 0xE7: i8080_call(c, 0x20); break; // RST 4
+    case 0xEF: i8080_call(c, 0x28); break; // RST 5
+    case 0xF7: i8080_call(c, 0x30); break; // RST 6
+    case 0xFF: i8080_call(c, 0x38); break; // RST 7
+
+    case 0xC5: i8080_push_stack(c, i8080_get_bc(c)); break; // PUSH B
+    case 0xD5: i8080_push_stack(c, i8080_get_de(c)); break; // PUSH D
+    case 0xE5: i8080_push_stack(c, i8080_get_hl(c)); break; // PUSH H
+    case 0xF5: i8080_push_psw(c); break; // PUSH PSW
+    case 0xC1: i8080_set_bc(c, i8080_pop_stack(c)); break; // POP B
+    case 0xD1: i8080_set_de(c, i8080_pop_stack(c)); break; // POP D
+    case 0xE1: i8080_set_hl(c, i8080_pop_stack(c)); break; // POP H
+    case 0xF1: i8080_pop_psw(c); break; // POP PSW
+
+    case 0xDB: c->a = c->port_in(c->userdata, i8080_next_byte(c)); break; // IN
+    case 0xD3: c->port_out(c->userdata, i8080_next_byte(c), c->a); break; // OUT
+
+    case 0x08:
+    case 0x10:
+    case 0x18:
+    case 0x20:
+    case 0x28:
+    case 0x30:
+    case 0x38: break; // undocumented NOPs
+
+    case 0xD9: i8080_ret(c); break; // undocumented RET
+
+    case 0xDD:
+    case 0xED:
+    case 0xFD: i8080_call(c, i8080_next_word(c)); break; // undocumented CALLs
+
+    case 0xCB: i8080_jmp(c, i8080_next_word(c)); break; // undocumented JMP
+    }
+}
+
+// initialises the emulator with default values
+void i8080_init(i8080* const c) {
+    c->read_byte = NULL;
+    c->write_byte = NULL;
+    c->port_in = NULL;
+    c->port_out = NULL;
+    c->userdata = NULL;
+
+    c->cyc = 0;
+
+    c->pc = 0;
+    c->sp = 0;
+
+    c->a = 0;
+    c->b = 0;
+    c->c = 0;
+    c->d = 0;
+    c->e = 0;
+    c->h = 0;
+    c->l = 0;
+
+    c->sf = 0;
+    c->zf = 0;
+    c->hf = 0;
+    c->pf = 0;
+    c->cf = 0;
+    c->iff = 0;
+
+    c->halted = 0;
+    c->interrupt_pending = 0;
+    c->interrupt_vector = 0;
+    c->interrupt_delay = 0;
+}
+
+// executes one instruction
+void i8080_step(i8080* const c) {
+    // interrupt processing: if an interrupt is pending and IFF is set,
+    // we execute the interrupt vector passed by the user.
+    if (c->interrupt_pending && c->iff && c->interrupt_delay == 0) {
+        c->interrupt_pending = 0;
+        c->iff = 0;
+        c->halted = 0;
+
+        i8080_execute(c, c->interrupt_vector);
+    }
+    else if (!c->halted) {
+        i8080_execute(c, i8080_next_byte(c));
+    }
+}
+
+// asks for an interrupt to be serviced
+void i8080_interrupt(i8080* const c, uint8_t opcode) {
+    c->interrupt_pending = 1;
+    c->interrupt_vector = opcode;
+}
+
+// outputs a debug trace of the emulator state to the standard output,
+// including registers and flags
+void i8080_debug_output(i8080* const c, bool print_disassembly) {
+    uint8_t f = 0;
+    f |= c->sf << 7;
+    f |= c->zf << 6;
+    f |= c->hf << 4;
+    f |= c->pf << 2;
+    f |= 1 << 1; // bit 1 is always 1
+    f |= c->cf << 0;
+
+    printf("PC: %04X, AF: %04X, BC: %04X, DE: %04X, HL: %04X, SP: %04X, CYC: %lu",
+        c->pc, c->a << 8 | f, i8080_get_bc(c), i8080_get_de(c), i8080_get_hl(c),
+        c->sp, c->cyc);
+
+    printf("\t(%02X %02X %02X %02X)", i8080_rb(c, c->pc), i8080_rb(c, c->pc + 1),
+        i8080_rb(c, c->pc + 2), i8080_rb(c, c->pc + 3));
+
+    if (print_disassembly) {
+        printf(" - %s", DISASSEMBLE_TABLE[i8080_rb(c, c->pc)]);
+    }
+
+    printf("\n");
+}
+
+#undef SET_ZSP
