@@ -1,7 +1,2 @@
 ﻿  emu8080_tests.c
-C:\Users\wbjhe\source\repos\8080emu\emu8080_tests.c(49,31): warning C4090: 'function': different 'const' qualifiers
-C:\Users\wbjhe\source\repos\8080emu\emu8080_tests.c(49,11): warning C4047: 'initializing': 'FILE *' differs in levels of indirection from 'errno_t'
-x64\Debug\emu8080.obj : warning LNK4042: object specified more than once; extras ignored
-emu8080_tests.obj : error LNK2019: unresolved external symbol i8080_init referenced in function run_test
-emu8080_tests.obj : error LNK2019: unresolved external symbol i8080_step referenced in function run_test
-C:\Users\wbjhe\source\repos\8080emu\x64\Debug\8080emu.exe : fatal error LNK1120: 2 unresolved externals
+  8080emu.vcxproj -> C:\Users\wbjhe\source\repos\8080emu\x64\Debug\8080emu.exe

@@ -46,8 +46,9 @@ static void port_out(void* userdata, uint8_t port, uint8_t value) {
 }
 
 static inline int load_file(const char* filename, uint16_t addr) {
-    FILE* f = fopen(filename, "rb");
-    if (f == NULL) {
+    FILE* f;
+    errno_t err_code = fopen_s(&f, filename, "w+");
+    if (err_code != 0) {
         fprintf(stderr, "error: can't open file '%s'.\n", filename);
         return 1;
     }
