@@ -21,7 +21,7 @@
     <ClCompile Include="emu8080.h">
       <Filter>Header Files</Filter>
     </ClCompile>
-    <ClCompile Include="emu8080_tests.c">
+    <ClCompile Include="space_invaders_view.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

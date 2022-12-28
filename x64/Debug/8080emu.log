@@ -1,2 +1,5 @@
-﻿  emu8080_tests.c
+﻿  space_invaders_view.c
+C:\Users\wbjhe\source\repos\8080emu\space_invaders_view.c(3,16): warning C4026: function declared with formal parameter list
+C:\Users\wbjhe\source\repos\8080emu\space_invaders_view.c(29): warning C4715: 'SDL_main': not all control paths return a value
+x64\Debug\emu8080.obj : warning LNK4042: object specified more than once; extras ignored
   8080emu.vcxproj -> C:\Users\wbjhe\source\repos\8080emu\x64\Debug\8080emu.exe
