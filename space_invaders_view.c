@@ -5,7 +5,8 @@ int main(void) {
 		SDL_Log("unable to initialize: %s", SDL_GetError());
 	}
 	
-	SDL_Window *window = SDL_CreateWindow("space invaders", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 224 * 2, 256 * 2, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+	SDL_Window *window = SDL_CreateWindow("space invaders", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+						 224 * 2, 256 * 2, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
 	if (window == NULL) {
 		return 1;
 	}

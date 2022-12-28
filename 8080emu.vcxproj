@@ -136,6 +136,7 @@
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">_CRT_SECURE_NO_WARNINGS</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Include="emu8080.h" />
+    <ClCompile Include="space_invaders_machine.c" />
     <ClCompile Include="space_invaders_view.c" />
   </ItemGroup>
   <ItemGroup>
@@ -147,6 +148,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="invaders.h" />
+    <ClInclude Include="space_invaders_machine.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
