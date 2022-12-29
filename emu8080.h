@@ -1,34 +1,67 @@
-#ifndef I8080_I8080_H_
-#define I8080_I8080_H_
+/*
+ This is free and unencumbered software released into the public domain.
+
+ Anyone is free to copy, modify, publish, use, compile, sell, or
+ distribute this software, either in source code form or as a compiled
+ binary, for any purpose, commercial or non-commercial, and by any
+ means.
+
+ In jurisdictions that recognize copyright laws, the author or authors
+ of this software dedicate any and all copyright interest in the
+ software to the public domain. We make this dedication for the benefit
+ of the public at large and to the detriment of our heirs and
+ successors. We intend this dedication to be an overt act of
+ relinquishment in perpetuity of all present and future rights to this
+ software under copyright law.
+
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ OTHER DEALINGS IN THE SOFTWARE.
+
+ For more information, please refer to <http://unlicense.org/>
+ */
 
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include <stdint.h>
-#include <stdbool.h>
 
-typedef struct i8080 {
-	// memory + io interface
-	uint8_t(*read_byte)(void*, uint16_t); // user function to read from memory
-	void (*write_byte)(void*, uint16_t, uint8_t); // same for writing to memory
-	uint8_t(*port_in)(void*, uint8_t); // user function to read from port
-	void (*port_out)(void*, uint8_t, uint8_t); // same for writing to port
-	void* userdata; // user custom pointer
+ //Some code cares that these flags are in exact 
+ // right bits when.  For instance, some code
+ // "pops" values into the PSW that they didn't push.
+ //
+typedef struct ConditionCodes {
+	uint8_t		cy : 1;
+	uint8_t		pad : 1;
+	uint8_t		p : 1;
+	uint8_t		pad2 : 1;
+	uint8_t		ac : 1;
+	uint8_t		pad3 : 1;
+	uint8_t		z : 1;
+	uint8_t		s : 1;
+} ConditionCodes;
 
-	unsigned long cyc; // cycle count
+typedef struct State8080 {
+	uint8_t		a;
+	uint8_t		b;
+	uint8_t		c;
+	uint8_t		d;
+	uint8_t		e;
+	uint8_t		h;
+	uint8_t		l;
+	uint16_t	sp;
+	uint16_t	pc;
+	uint8_t* memory;
+	struct ConditionCodes		cc;
+	uint8_t		int_enable;
 
-	uint16_t pc, sp; // program counter, stack pointer
-	uint8_t a, b, c, d, e, h, l; // registers
-	// flags: sign, zero, half-carry, parity, carry, interrupt flip-flop
-	bool sf : 1, zf : 1, hf : 1, pf : 1, cf : 1, iff : 1;
-	bool halted : 1;
+} State8080;
 
-	bool interrupt_pending : 1;
-	uint8_t interrupt_vector;
-	uint8_t interrupt_delay;
-} i8080;
 
-void i8080_init(i8080* const c);
-void i8080_step(i8080* const c);
-void i8080_interrupt(i8080* const c, uint8_t opcode);
-void i8080_debug_output(i8080* const c, bool print_disassembly);
 
-#endif // I8080_I8080_H_
+int Emulate8080Op(State8080* state);
+void GenerateInterrupt(State8080* state, int interrupt_num);

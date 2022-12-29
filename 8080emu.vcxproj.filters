@@ -21,12 +21,6 @@
     <ClCompile Include="emu8080.h">
       <Filter>Header Files</Filter>
     </ClCompile>
-    <ClCompile Include="space_invaders_view.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="space_invaders_machine.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="invaders" />
@@ -37,8 +31,5 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="invaders.h" />
-    <ClInclude Include="space_invaders_machine.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
   </ItemGroup>
 </Project>

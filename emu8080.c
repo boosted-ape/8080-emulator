@@ -1,783 +1,1409 @@
+/*
+ This is free and unencumbered software released into the public domain.
+
+ Anyone is free to copy, modify, publish, use, compile, sell, or
+ distribute this software, either in source code form or as a compiled
+ binary, for any purpose, commercial or non-commercial, and by any
+ means.
+
+ In jurisdictions that recognize copyright laws, the author or authors
+ of this software dedicate any and all copyright interest in the
+ software to the public domain. We make this dedication for the benefit
+ of the public at large and to the detriment of our heirs and
+ successors. We intend this dedication to be an overt act of
+ relinquishment in perpetuity of all present and future rights to this
+ software under copyright law.
+
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ OTHER DEALINGS IN THE SOFTWARE.
+
+ For more information, please refer to <http://unlicense.org/>
+ */
+
 #include "emu8080.h"
 
-// this array defines the number of cycles one opcode takes.
-// note that there are some special cases: conditional RETs and CALLs
-// add +6 cycles if the condition is met
-// clang-format off
-static const uint8_t OPCODES_CYCLES[256] = {
-    //  0  1   2   3   4   5   6   7   8  9   A   B   C   D   E  F
-        4, 10, 7,  5,  5,  5,  7,  4,  4, 10, 7,  5,  5,  5,  7, 4,  // 0
-        4, 10, 7,  5,  5,  5,  7,  4,  4, 10, 7,  5,  5,  5,  7, 4,  // 1
-        4, 10, 16, 5,  5,  5,  7,  4,  4, 10, 16, 5,  5,  5,  7, 4,  // 2
-        4, 10, 13, 5,  10, 10, 10, 4,  4, 10, 13, 5,  5,  5,  7, 4,  // 3
-        5, 5,  5,  5,  5,  5,  7,  5,  5, 5,  5,  5,  5,  5,  7, 5,  // 4
-        5, 5,  5,  5,  5,  5,  7,  5,  5, 5,  5,  5,  5,  5,  7, 5,  // 5
-        5, 5,  5,  5,  5,  5,  7,  5,  5, 5,  5,  5,  5,  5,  7, 5,  // 6
-        7, 7,  7,  7,  7,  7,  7,  7,  5, 5,  5,  5,  5,  5,  7, 5,  // 7
-        4, 4,  4,  4,  4,  4,  7,  4,  4, 4,  4,  4,  4,  4,  7, 4,  // 8
-        4, 4,  4,  4,  4,  4,  7,  4,  4, 4,  4,  4,  4,  4,  7, 4,  // 9
-        4, 4,  4,  4,  4,  4,  7,  4,  4, 4,  4,  4,  4,  4,  7, 4,  // A
-        4, 4,  4,  4,  4,  4,  7,  4,  4, 4,  4,  4,  4,  4,  7, 4,  // B
-        5, 10, 10, 10, 11, 11, 7,  11, 5, 10, 10, 10, 11, 17, 7, 11, // C
-        5, 10, 10, 10, 11, 11, 7,  11, 5, 10, 10, 10, 11, 17, 7, 11, // D
-        5, 10, 10, 18, 11, 11, 7,  11, 5, 5,  10, 4,  11, 17, 7, 11, // E
-        5, 10, 10, 4,  11, 11, 7,  11, 5, 5,  10, 4,  11, 17, 7, 11  // F
+#define PRINTOPS 1
+
+static int parity(int x, int size)
+{
+	int i;
+	int p = 0;
+	x = (x & ((1 << size) - 1));
+	for (i = 0; i < size; i++)
+	{
+		if (x & 0x1) p++;
+		x = x >> 1;
+	}
+	return (0 == (p & 0x1));
+}
+
+
+unsigned char cycles8080[] = {
+	4, 10, 7, 5, 5, 5, 7, 4, 4, 10, 7, 5, 5, 5, 7, 4, //0x00..0x0f
+	4, 10, 7, 5, 5, 5, 7, 4, 4, 10, 7, 5, 5, 5, 7, 4, //0x10..0x1f
+	4, 10, 16, 5, 5, 5, 7, 4, 4, 10, 16, 5, 5, 5, 7, 4, //etc
+	4, 10, 13, 5, 10, 10, 10, 4, 4, 10, 13, 5, 5, 5, 7, 4,
+
+	5, 5, 5, 5, 5, 5, 7, 5, 5, 5, 5, 5, 5, 5, 7, 5, //0x40..0x4f
+	5, 5, 5, 5, 5, 5, 7, 5, 5, 5, 5, 5, 5, 5, 7, 5,
+	5, 5, 5, 5, 5, 5, 7, 5, 5, 5, 5, 5, 5, 5, 7, 5,
+	7, 7, 7, 7, 7, 7, 7, 7, 5, 5, 5, 5, 5, 5, 7, 5,
+
+	4, 4, 4, 4, 4, 4, 7, 4, 4, 4, 4, 4, 4, 4, 7, 4, //0x80..8x4f
+	4, 4, 4, 4, 4, 4, 7, 4, 4, 4, 4, 4, 4, 4, 7, 4,
+	4, 4, 4, 4, 4, 4, 7, 4, 4, 4, 4, 4, 4, 4, 7, 4,
+	4, 4, 4, 4, 4, 4, 7, 4, 4, 4, 4, 4, 4, 4, 7, 4,
+
+	11, 10, 10, 10, 17, 11, 7, 11, 11, 10, 10, 10, 10, 17, 7, 11, //0xc0..0xcf
+	11, 10, 10, 10, 17, 11, 7, 11, 11, 10, 10, 10, 10, 17, 7, 11,
+	11, 10, 10, 18, 17, 11, 7, 11, 11, 5, 10, 5, 17, 17, 7, 11,
+	11, 10, 10, 4, 17, 11, 7, 11, 11, 5, 10, 4, 17, 17, 7, 11,
 };
-// clang-format on
 
-static const char* DISASSEMBLE_TABLE[] = { "nop", "lxi b,#", "stax b", "inx b",
-    "inr b", "dcr b", "mvi b,#", "rlc", "ill", "dad b", "ldax b", "dcx b",
-    "inr c", "dcr c", "mvi c,#", "rrc", "ill", "lxi d,#", "stax d", "inx d",
-    "inr d", "dcr d", "mvi d,#", "ral", "ill", "dad d", "ldax d", "dcx d",
-    "inr e", "dcr e", "mvi e,#", "rar", "ill", "lxi h,#", "shld", "inx h",
-    "inr h", "dcr h", "mvi h,#", "daa", "ill", "dad h", "lhld", "dcx h",
-    "inr l", "dcr l", "mvi l,#", "cma", "ill", "lxi sp,#", "sta $", "inx sp",
-    "inr M", "dcr M", "mvi M,#", "stc", "ill", "dad sp", "lda $", "dcx sp",
-    "inr a", "dcr a", "mvi a,#", "cmc", "mov b,b", "mov b,c", "mov b,d",
-    "mov b,e", "mov b,h", "mov b,l", "mov b,M", "mov b,a", "mov c,b", "mov c,c",
-    "mov c,d", "mov c,e", "mov c,h", "mov c,l", "mov c,M", "mov c,a", "mov d,b",
-    "mov d,c", "mov d,d", "mov d,e", "mov d,h", "mov d,l", "mov d,M", "mov d,a",
-    "mov e,b", "mov e,c", "mov e,d", "mov e,e", "mov e,h", "mov e,l", "mov e,M",
-    "mov e,a", "mov h,b", "mov h,c", "mov h,d", "mov h,e", "mov h,h", "mov h,l",
-    "mov h,M", "mov h,a", "mov l,b", "mov l,c", "mov l,d", "mov l,e", "mov l,h",
-    "mov l,l", "mov l,M", "mov l,a", "mov M,b", "mov M,c", "mov M,d", "mov M,e",
-    "mov M,h", "mov M,l", "hlt", "mov M,a", "mov a,b", "mov a,c", "mov a,d",
-    "mov a,e", "mov a,h", "mov a,l", "mov a,M", "mov a,a", "add b", "add c",
-    "add d", "add e", "add h", "add l", "add M", "add a", "adc b", "adc c",
-    "adc d", "adc e", "adc h", "adc l", "adc M", "adc a", "sub b", "sub c",
-    "sub d", "sub e", "sub h", "sub l", "sub M", "sub a", "sbb b", "sbb c",
-    "sbb d", "sbb e", "sbb h", "sbb l", "sbb M", "sbb a", "ana b", "ana c",
-    "ana d", "ana e", "ana h", "ana l", "ana M", "ana a", "xra b", "xra c",
-    "xra d", "xra e", "xra h", "xra l", "xra M", "xra a", "ora b", "ora c",
-    "ora d", "ora e", "ora h", "ora l", "ora M", "ora a", "cmp b", "cmp c",
-    "cmp d", "cmp e", "cmp h", "cmp l", "cmp M", "cmp a", "rnz", "pop b",
-    "jnz $", "jmp $", "cnz $", "push b", "adi #", "rst 0", "rz", "ret", "jz $",
-    "ill", "cz $", "call $", "aci #", "rst 1", "rnc", "pop d", "jnc $", "out p",
-    "cnc $", "push d", "sui #", "rst 2", "rc", "ill", "jc $", "in p", "cc $",
-    "ill", "sbi #", "rst 3", "rpo", "pop h", "jpo $", "xthl", "cpo $", "push h",
-    "ani #", "rst 4", "rpe", "pchl", "jpe $", "xchg", "cpe $", "ill", "xri #",
-    "rst 5", "rp", "pop psw", "jp $", "di", "cp $", "push psw", "ori #",
-    "rst 6", "rm", "sphl", "jm $", "ei", "cm $", "ill", "cpi #", "rst 7" };
+static int Disassemble8080Op(unsigned char* codebuffer, int pc)
+{
+	unsigned char* code = &codebuffer[pc];
+	int opbytes = 1;
+	printf("%04x ", pc);
+	switch (*code)
+	{
+	case 0x00: printf("NOP"); break;
+	case 0x01: printf("LXI    B,#$%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0x02: printf("STAX   B"); break;
+	case 0x03: printf("INX    B"); break;
+	case 0x04: printf("INR    B"); break;
+	case 0x05: printf("DCR    B"); break;
+	case 0x06: printf("MVI    B,#$%02x", code[1]); opbytes = 2; break;
+	case 0x07: printf("RLC"); break;
+	case 0x08: printf("NOP"); break;
+	case 0x09: printf("DAD    B"); break;
+	case 0x0a: printf("LDAX   B"); break;
+	case 0x0b: printf("DCX    B"); break;
+	case 0x0c: printf("INR    C"); break;
+	case 0x0d: printf("DCR    C"); break;
+	case 0x0e: printf("MVI    C,#$%02x", code[1]); opbytes = 2;	break;
+	case 0x0f: printf("RRC"); break;
 
-#define SET_ZSP(c, val) \
-  do { \
-    c->zf = (val) == 0; \
-    c->sf = (val) >> 7; \
-    c->pf = parity(val); \
-  } while (0)
+	case 0x10: printf("NOP"); break;
+	case 0x11: printf("LXI    D,#$%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0x12: printf("STAX   D"); break;
+	case 0x13: printf("INX    D"); break;
+	case 0x14: printf("INR    D"); break;
+	case 0x15: printf("DCR    D"); break;
+	case 0x16: printf("MVI    D,#$%02x", code[1]); opbytes = 2; break;
+	case 0x17: printf("RAL"); break;
+	case 0x18: printf("NOP"); break;
+	case 0x19: printf("DAD    D"); break;
+	case 0x1a: printf("LDAX   D"); break;
+	case 0x1b: printf("DCX    D"); break;
+	case 0x1c: printf("INR    E"); break;
+	case 0x1d: printf("DCR    E"); break;
+	case 0x1e: printf("MVI    E,#$%02x", code[1]); opbytes = 2; break;
+	case 0x1f: printf("RAR"); break;
 
-// memory helpers (the only four to use `read_byte` and `write_byte` function
-// pointers)
+	case 0x20: printf("NOP"); break;
+	case 0x21: printf("LXI    H,#$%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0x22: printf("SHLD   $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0x23: printf("INX    H"); break;
+	case 0x24: printf("INR    H"); break;
+	case 0x25: printf("DCR    H"); break;
+	case 0x26: printf("MVI    H,#$%02x", code[1]); opbytes = 2; break;
+	case 0x27: printf("DAA"); break;
+	case 0x28: printf("NOP"); break;
+	case 0x29: printf("DAD    H"); break;
+	case 0x2a: printf("LHLD   $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0x2b: printf("DCX    H"); break;
+	case 0x2c: printf("INR    L"); break;
+	case 0x2d: printf("DCR    L"); break;
+	case 0x2e: printf("MVI    L,#$%02x", code[1]); opbytes = 2; break;
+	case 0x2f: printf("CMA"); break;
 
-// reads a byte from memory
-static inline uint8_t i8080_rb(i8080* const c, uint16_t addr) {
-    return c->read_byte(c->userdata, addr);
+	case 0x30: printf("NOP"); break;
+	case 0x31: printf("LXI    SP,#$%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0x32: printf("STA    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0x33: printf("INX    SP"); break;
+	case 0x34: printf("INR    M"); break;
+	case 0x35: printf("DCR    M"); break;
+	case 0x36: printf("MVI    M,#$%02x", code[1]); opbytes = 2; break;
+	case 0x37: printf("STC"); break;
+	case 0x38: printf("NOP"); break;
+	case 0x39: printf("DAD    SP"); break;
+	case 0x3a: printf("LDA    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0x3b: printf("DCX    SP"); break;
+	case 0x3c: printf("INR    A"); break;
+	case 0x3d: printf("DCR    A"); break;
+	case 0x3e: printf("MVI    A,#$%02x", code[1]); opbytes = 2; break;
+	case 0x3f: printf("CMC"); break;
+
+	case 0x40: printf("MOV    B,B"); break;
+	case 0x41: printf("MOV    B,C"); break;
+	case 0x42: printf("MOV    B,D"); break;
+	case 0x43: printf("MOV    B,E"); break;
+	case 0x44: printf("MOV    B,H"); break;
+	case 0x45: printf("MOV    B,L"); break;
+	case 0x46: printf("MOV    B,M"); break;
+	case 0x47: printf("MOV    B,A"); break;
+	case 0x48: printf("MOV    C,B"); break;
+	case 0x49: printf("MOV    C,C"); break;
+	case 0x4a: printf("MOV    C,D"); break;
+	case 0x4b: printf("MOV    C,E"); break;
+	case 0x4c: printf("MOV    C,H"); break;
+	case 0x4d: printf("MOV    C,L"); break;
+	case 0x4e: printf("MOV    C,M"); break;
+	case 0x4f: printf("MOV    C,A"); break;
+
+	case 0x50: printf("MOV    D,B"); break;
+	case 0x51: printf("MOV    D,C"); break;
+	case 0x52: printf("MOV    D,D"); break;
+	case 0x53: printf("MOV    D.E"); break;
+	case 0x54: printf("MOV    D,H"); break;
+	case 0x55: printf("MOV    D,L"); break;
+	case 0x56: printf("MOV    D,M"); break;
+	case 0x57: printf("MOV    D,A"); break;
+	case 0x58: printf("MOV    E,B"); break;
+	case 0x59: printf("MOV    E,C"); break;
+	case 0x5a: printf("MOV    E,D"); break;
+	case 0x5b: printf("MOV    E,E"); break;
+	case 0x5c: printf("MOV    E,H"); break;
+	case 0x5d: printf("MOV    E,L"); break;
+	case 0x5e: printf("MOV    E,M"); break;
+	case 0x5f: printf("MOV    E,A"); break;
+
+	case 0x60: printf("MOV    H,B"); break;
+	case 0x61: printf("MOV    H,C"); break;
+	case 0x62: printf("MOV    H,D"); break;
+	case 0x63: printf("MOV    H.E"); break;
+	case 0x64: printf("MOV    H,H"); break;
+	case 0x65: printf("MOV    H,L"); break;
+	case 0x66: printf("MOV    H,M"); break;
+	case 0x67: printf("MOV    H,A"); break;
+	case 0x68: printf("MOV    L,B"); break;
+	case 0x69: printf("MOV    L,C"); break;
+	case 0x6a: printf("MOV    L,D"); break;
+	case 0x6b: printf("MOV    L,E"); break;
+	case 0x6c: printf("MOV    L,H"); break;
+	case 0x6d: printf("MOV    L,L"); break;
+	case 0x6e: printf("MOV    L,M"); break;
+	case 0x6f: printf("MOV    L,A"); break;
+
+	case 0x70: printf("MOV    M,B"); break;
+	case 0x71: printf("MOV    M,C"); break;
+	case 0x72: printf("MOV    M,D"); break;
+	case 0x73: printf("MOV    M.E"); break;
+	case 0x74: printf("MOV    M,H"); break;
+	case 0x75: printf("MOV    M,L"); break;
+	case 0x76: printf("HLT");        break;
+	case 0x77: printf("MOV    M,A"); break;
+	case 0x78: printf("MOV    A,B"); break;
+	case 0x79: printf("MOV    A,C"); break;
+	case 0x7a: printf("MOV    A,D"); break;
+	case 0x7b: printf("MOV    A,E"); break;
+	case 0x7c: printf("MOV    A,H"); break;
+	case 0x7d: printf("MOV    A,L"); break;
+	case 0x7e: printf("MOV    A,M"); break;
+	case 0x7f: printf("MOV    A,A"); break;
+
+	case 0x80: printf("ADD    B"); break;
+	case 0x81: printf("ADD    C"); break;
+	case 0x82: printf("ADD    D"); break;
+	case 0x83: printf("ADD    E"); break;
+	case 0x84: printf("ADD    H"); break;
+	case 0x85: printf("ADD    L"); break;
+	case 0x86: printf("ADD    M"); break;
+	case 0x87: printf("ADD    A"); break;
+	case 0x88: printf("ADC    B"); break;
+	case 0x89: printf("ADC    C"); break;
+	case 0x8a: printf("ADC    D"); break;
+	case 0x8b: printf("ADC    E"); break;
+	case 0x8c: printf("ADC    H"); break;
+	case 0x8d: printf("ADC    L"); break;
+	case 0x8e: printf("ADC    M"); break;
+	case 0x8f: printf("ADC    A"); break;
+
+	case 0x90: printf("SUB    B"); break;
+	case 0x91: printf("SUB    C"); break;
+	case 0x92: printf("SUB    D"); break;
+	case 0x93: printf("SUB    E"); break;
+	case 0x94: printf("SUB    H"); break;
+	case 0x95: printf("SUB    L"); break;
+	case 0x96: printf("SUB    M"); break;
+	case 0x97: printf("SUB    A"); break;
+	case 0x98: printf("SBB    B"); break;
+	case 0x99: printf("SBB    C"); break;
+	case 0x9a: printf("SBB    D"); break;
+	case 0x9b: printf("SBB    E"); break;
+	case 0x9c: printf("SBB    H"); break;
+	case 0x9d: printf("SBB    L"); break;
+	case 0x9e: printf("SBB    M"); break;
+	case 0x9f: printf("SBB    A"); break;
+
+	case 0xa0: printf("ANA    B"); break;
+	case 0xa1: printf("ANA    C"); break;
+	case 0xa2: printf("ANA    D"); break;
+	case 0xa3: printf("ANA    E"); break;
+	case 0xa4: printf("ANA    H"); break;
+	case 0xa5: printf("ANA    L"); break;
+	case 0xa6: printf("ANA    M"); break;
+	case 0xa7: printf("ANA    A"); break;
+	case 0xa8: printf("XRA    B"); break;
+	case 0xa9: printf("XRA    C"); break;
+	case 0xaa: printf("XRA    D"); break;
+	case 0xab: printf("XRA    E"); break;
+	case 0xac: printf("XRA    H"); break;
+	case 0xad: printf("XRA    L"); break;
+	case 0xae: printf("XRA    M"); break;
+	case 0xaf: printf("XRA    A"); break;
+
+	case 0xb0: printf("ORA    B"); break;
+	case 0xb1: printf("ORA    C"); break;
+	case 0xb2: printf("ORA    D"); break;
+	case 0xb3: printf("ORA    E"); break;
+	case 0xb4: printf("ORA    H"); break;
+	case 0xb5: printf("ORA    L"); break;
+	case 0xb6: printf("ORA    M"); break;
+	case 0xb7: printf("ORA    A"); break;
+	case 0xb8: printf("CMP    B"); break;
+	case 0xb9: printf("CMP    C"); break;
+	case 0xba: printf("CMP    D"); break;
+	case 0xbb: printf("CMP    E"); break;
+	case 0xbc: printf("CMP    H"); break;
+	case 0xbd: printf("CMP    L"); break;
+	case 0xbe: printf("CMP    M"); break;
+	case 0xbf: printf("CMP    A"); break;
+
+	case 0xc0: printf("RNZ"); break;
+	case 0xc1: printf("POP    B"); break;
+	case 0xc2: printf("JNZ    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xc3: printf("JMP    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xc4: printf("CNZ    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xc5: printf("PUSH   B"); break;
+	case 0xc6: printf("ADI    #$%02x", code[1]); opbytes = 2; break;
+	case 0xc7: printf("RST    0"); break;
+	case 0xc8: printf("RZ"); break;
+	case 0xc9: printf("RET"); break;
+	case 0xca: printf("JZ     $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xcb: printf("JMP    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xcc: printf("CZ     $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xcd: printf("CALL   $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xce: printf("ACI    #$%02x", code[1]); opbytes = 2; break;
+	case 0xcf: printf("RST    1"); break;
+
+	case 0xd0: printf("RNC"); break;
+	case 0xd1: printf("POP    D"); break;
+	case 0xd2: printf("JNC    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xd3: printf("OUT    #$%02x", code[1]); opbytes = 2; break;
+	case 0xd4: printf("CNC    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xd5: printf("PUSH   D"); break;
+	case 0xd6: printf("SUI    #$%02x", code[1]); opbytes = 2; break;
+	case 0xd7: printf("RST    2"); break;
+	case 0xd8: printf("RC");  break;
+	case 0xd9: printf("RET"); break;
+	case 0xda: printf("JC     $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xdb: printf("IN     #$%02x", code[1]); opbytes = 2; break;
+	case 0xdc: printf("CC     $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xdd: printf("CALL   $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xde: printf("SBI    #$%02x", code[1]); opbytes = 2; break;
+	case 0xdf: printf("RST    3"); break;
+
+	case 0xe0: printf("RPO"); break;
+	case 0xe1: printf("POP    H"); break;
+	case 0xe2: printf("JPO    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xe3: printf("XTHL");break;
+	case 0xe4: printf("CPO    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xe5: printf("PUSH   H"); break;
+	case 0xe6: printf("ANI    #$%02x", code[1]); opbytes = 2; break;
+	case 0xe7: printf("RST    4"); break;
+	case 0xe8: printf("RPE"); break;
+	case 0xe9: printf("PCHL");break;
+	case 0xea: printf("JPE    $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xeb: printf("XCHG"); break;
+	case 0xec: printf("CPE     $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xed: printf("CALL   $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xee: printf("XRI    #$%02x", code[1]); opbytes = 2; break;
+	case 0xef: printf("RST    5"); break;
+
+	case 0xf0: printf("RP");  break;
+	case 0xf1: printf("POP    PSW"); break;
+	case 0xf2: printf("JP     $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xf3: printf("DI");  break;
+	case 0xf4: printf("CP     $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xf5: printf("PUSH   PSW"); break;
+	case 0xf6: printf("ORI    #$%02x", code[1]); opbytes = 2; break;
+	case 0xf7: printf("RST    6"); break;
+	case 0xf8: printf("RM");  break;
+	case 0xf9: printf("SPHL");break;
+	case 0xfa: printf("JM     $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xfb: printf("EI");  break;
+	case 0xfc: printf("CM     $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xfd: printf("CALL   $%02x%02x", code[2], code[1]); opbytes = 3; break;
+	case 0xfe: printf("CPI    #$%02x", code[1]); opbytes = 2; break;
+	case 0xff: printf("RST    7"); break;
+	}
+
+	return opbytes;
 }
 
-// writes a byte to memory
-static inline void i8080_wb(i8080* const c, uint16_t addr, uint8_t val) {
-    c->write_byte(c->userdata, addr, val);
+static void LogicFlagsA(State8080* state)
+{
+	state->cc.cy = state->cc.ac = 0;
+	state->cc.z = (state->a == 0);
+	state->cc.s = (0x80 == (state->a & 0x80));
+	state->cc.p = parity(state->a, 8);
 }
 
-// reads a word from memory
-static inline uint16_t i8080_rw(i8080* const c, uint16_t addr) {
-    return c->read_byte(c->userdata, addr + 1) << 8 |
-        c->read_byte(c->userdata, addr);
+static void ArithFlagsA(State8080* state, uint16_t res)
+{
+	state->cc.cy = (res > 0xff);
+	state->cc.z = ((res & 0xff) == 0);
+	state->cc.s = (0x80 == (res & 0x80));
+	state->cc.p = parity(res & 0xff, 8);
 }
 
-// writes a word to memory
-static inline void i8080_ww(i8080* const c, uint16_t addr, uint16_t val) {
-    c->write_byte(c->userdata, addr, val & 0xFF);
-    c->write_byte(c->userdata, addr + 1, val >> 8);
+static void UnimplementedInstruction(State8080* state)
+{
+	//pc will have advanced one, so undo that
+	printf("Error: Unimplemented instruction\n");
+	state->pc--;
+	Disassemble8080Op(state->memory, state->pc);
+	printf("\n");
+	exit(1);
 }
 
-// returns the next byte in memory (and updates the program counter)
-static inline uint8_t i8080_next_byte(i8080* const c) {
-    return i8080_rb(c, c->pc++);
+static void WriteMem(State8080* state, uint16_t address, uint8_t value)
+{
+	if (address < 0x2000)
+	{
+		//        printf("Writing ROM not allowed %x\n", address);
+		return;
+	}
+	if (address >= 0x4000)
+	{
+		//       printf("Writing out of Space Invaders RAM not allowed %x\n", address);
+		return;
+	}
+
+	state->memory[address] = value;
 }
 
-// returns the next word in memory (and updates the program counter)
-static inline uint16_t i8080_next_word(i8080* const c) {
-    uint16_t result = i8080_rw(c, c->pc);
-    c->pc += 2;
-    return result;
+static uint8_t ReadFromHL(State8080* state)
+{
+	uint16_t offset = (state->h << 8) | state->l;
+	return state->memory[offset];
 }
 
-// paired registers helpers (setters and getters)
-static inline void i8080_set_bc(i8080* const c, uint16_t val) {
-    c->b = val >> 8;
-    c->c = val & 0xFF;
+static void WriteToHL(State8080* state, uint8_t value)
+{
+	uint16_t offset = (state->h << 8) | state->l;
+	WriteMem(state, offset, value);
 }
 
-static inline void i8080_set_de(i8080* const c, uint16_t val) {
-    c->d = val >> 8;
-    c->e = val & 0xFF;
+static void Push(State8080* state, uint8_t high, uint8_t low)
+{
+	WriteMem(state, state->sp - 1, high);
+	WriteMem(state, state->sp - 2, low);
+	state->sp = state->sp - 2;
+	//    printf ("%04x %04x\n", state->pc, state->sp);
 }
 
-static inline void i8080_set_hl(i8080* const c, uint16_t val) {
-    c->h = val >> 8;
-    c->l = val & 0xFF;
+static void Pop(State8080* state, uint8_t* high, uint8_t* low)
+{
+	*low = state->memory[state->sp];
+	*high = state->memory[state->sp + 1];
+	state->sp += 2;
+	//    printf ("%04x %04x pop\n", state->pc, state->sp);
 }
 
-static inline uint16_t i8080_get_bc(i8080* const c) {
-    return (c->b << 8) | c->c;
+static void FlagsZSP(State8080* state, uint8_t value)
+{
+	state->cc.z = (value == 0);
+	state->cc.s = (0x80 == (value & 0x80));
+	state->cc.p = parity(value, 8);
 }
 
-static inline uint16_t i8080_get_de(i8080* const c) {
-    return (c->d << 8) | c->e;
+int Emulate8080Op(State8080* state)
+{
+	unsigned char* opcode = &state->memory[state->pc];
+
+#if PRINTOPS
+	Disassemble8080Op(state->memory, state->pc);
+#endif
+
+	state->pc += 1;
+
+	switch (*opcode)
+	{
+	case 0x00: break;	//NOP
+	case 0x01: 							//LXI	B,word
+		state->c = opcode[1];
+		state->b = opcode[2];
+		state->pc += 2;
+		break;
+	case 0x02: 							//STAX B
+	{
+		uint16_t offset = (state->b << 8) | state->c;
+		WriteMem(state, offset, state->a);
+	}
+	break;
+	case 0x03: 							//INX    B
+		state->c++;
+		if (state->c == 0)
+			state->b++;
+		break;
+	case 0x04: 							//INR	B
+		state->b += 1;
+		FlagsZSP(state, state->b);
+		break;
+	case 0x05: 							//DCR    B
+		state->b -= 1;
+		FlagsZSP(state, state->b);
+		break;
+	case 0x06: 							//MVI B,byte
+		state->b = opcode[1];
+		state->pc++;
+		break;
+	case 0x07: 							//RLC
+	{
+		uint8_t x = state->a;
+		state->a = ((x & 0x80) >> 7) | (x << 1);
+		state->cc.cy = (0x80 == (x & 0x80));
+	}
+	break;
+	case 0x08: UnimplementedInstruction(state); break;
+	case 0x09: 							//DAD B
+	{
+		uint32_t hl = (state->h << 8) | state->l;
+		uint32_t bc = (state->b << 8) | state->c;
+		uint32_t res = hl + bc;
+		state->h = (res & 0xff00) >> 8;
+		state->l = res & 0xff;
+		state->cc.cy = ((res & 0xffff0000) != 0);
+	}
+	break;
+	case 0x0a: 							//LDAX   B
+	{
+		uint16_t offset = (state->b << 8) | state->c;
+		state->a = state->memory[offset];
+	}
+	break;
+	case 0x0b:							//DCX B 
+		state->c -= 1;
+		if (state->c == 0xff)
+			state->b -= 1;
+		break;
+	case 0x0c:                          //INR C
+		state->c += 1;
+		FlagsZSP(state, state->c);
+		break;
+
+	case 0x0d: 							//DCR C
+		state->c -= 1;
+		FlagsZSP(state, state->c);
+		break;
+	case 0x0e: 							//MVI C,byte
+		state->c = opcode[1];
+		state->pc++;
+		break;
+	case 0x0f: 							//RRC
+	{
+		uint8_t x = state->a;
+		state->a = ((x & 1) << 7) | (x >> 1);
+		state->cc.cy = (1 == (x & 1));
+	}
+	break;
+
+	case 0x10: UnimplementedInstruction(state); break;
+	case 0x11: 							//LXI	D,word
+		state->e = opcode[1];
+		state->d = opcode[2];
+		state->pc += 2;
+		break;
+	case 0x12: 							//STAX D
+	{
+		uint16_t offset = (state->d << 8) | state->e;
+		WriteMem(state, offset, state->a);
+	}
+	break;
+	case 0x13: 							//INX    D
+		state->e++;
+		if (state->e == 0)
+			state->d++;
+		break;
+	case 0x14: 							//INR D
+		state->d += 1;
+		FlagsZSP(state, state->d);
+		break;
+	case 0x15: 							//DCR    D
+		state->d -= 1;
+		FlagsZSP(state, state->d);
+		break;
+	case 0x16: 							//MVI D,byte
+		state->d = opcode[1];
+		state->pc++;
+		break;
+	case 0x17:                           //RAL
+	{
+		uint8_t x = state->a;
+		state->a = state->cc.cy | (x << 1);
+		state->cc.cy = (0x80 == (x & 0x80));
+	}
+	break;
+	case 0x18: UnimplementedInstruction(state); break;
+	case 0x19: 							//DAD    D
+	{
+		uint32_t hl = (state->h << 8) | state->l;
+		uint32_t de = (state->d << 8) | state->e;
+		uint32_t res = hl + de;
+		state->h = (res & 0xff00) >> 8;
+		state->l = res & 0xff;
+		state->cc.cy = ((res & 0xffff0000) != 0);
+	}
+	break;
+	case 0x1a: 							//LDAX	D
+	{
+		uint16_t offset = (state->d << 8) | state->e;
+		state->a = state->memory[offset];
+	}
+	break;
+	case 0x1b: 							//DCX D
+		state->e -= 1;
+		if (state->e == 0xff)
+			state->d -= 1;
+		break;
+	case 0x1c:							//INR E
+		state->e += 1;
+		FlagsZSP(state, state->e);
+		break;
+
+	case 0x1d: 							//DCR    E
+		state->e -= 1;
+		FlagsZSP(state, state->e);
+		break;
+	case 0x1e: 							//MVI E,byte
+		state->e = opcode[1];
+		state->pc++;
+		break;
+	case 0x1f:                           //RAR
+	{
+		uint8_t x = state->a;
+		state->a = (state->cc.cy << 7) | (x >> 1);
+		state->cc.cy = (1 == (x & 1));
+	}
+	break;
+	case 0x20: UnimplementedInstruction(state); break;
+	case 0x21: 							//LXI	H,word
+		state->l = opcode[1];
+		state->h = opcode[2];
+		state->pc += 2;
+		break;
+	case 0x22: 							//SHLD
+	{
+		uint16_t offset = opcode[1] | (opcode[2] << 8);
+		WriteMem(state, offset, state->l);
+		WriteMem(state, offset + 1, state->h);
+		state->pc += 2;
+	}
+	break;
+	case 0x23: 							//INX    H
+		state->l++;
+		if (state->l == 0)
+			state->h++;
+		break;
+	case 0x24:							//INR	H 
+		state->h += 1;
+		FlagsZSP(state, state->h);
+		break;
+	case 0x25: 							//DCR    H
+		state->h -= 1;
+		FlagsZSP(state, state->h);
+		break;
+	case 0x26:  							//MVI H,byte
+		state->h = opcode[1];
+		state->pc++;
+		break;
+	case 0x27:
+		if ((state->a & 0xf) > 9)
+			state->a += 6;
+		if ((state->a & 0xf0) > 0x90)
+		{
+			uint16_t res = (uint16_t)state->a + 0x60;
+			state->a = res & 0xff;
+			ArithFlagsA(state, res);
+		}
+		break;
+	case 0x28: UnimplementedInstruction(state); break;
+	case 0x29: 								//DAD    H
+	{
+		uint32_t hl = (state->h << 8) | state->l;
+		uint32_t res = hl + hl;
+		state->h = (res & 0xff00) >> 8;
+		state->l = res & 0xff;
+		state->cc.cy = ((res & 0xffff0000) != 0);
+	}
+	break;
+	case 0x2a: 								//LHLD adr
+	{
+		uint16_t offset = opcode[1] | (opcode[2] << 8);
+		state->l = state->memory[offset];
+		state->h = state->memory[offset + 1];
+		state->pc += 2;
+	}
+	break;
+	case 0x2b: 								//DCX H
+		state->l -= 1;
+		if (state->l == 0xff)
+			state->h -= 1;
+		break;
+	case 0x2c:								//INR L
+		state->l += 1;
+		FlagsZSP(state, state->l);
+		break;
+	case 0x2d: 							//DCR    L
+		state->l -= 1;
+		FlagsZSP(state, state->l);
+		break;
+	case 0x2e:  						//MVI L,byte
+		state->l = opcode[1];
+		state->pc++;
+		break;
+	case 0x2f:
+		state->a = ~state->a;			//CMA 
+		break;
+	case 0x30: UnimplementedInstruction(state); break;
+	case 0x31: 							//LXI	SP,word
+		state->sp = (opcode[2] << 8) | opcode[1];
+		state->pc += 2;
+		break;
+	case 0x32: 							//STA    (word)
+	{
+		uint16_t offset = (opcode[2] << 8) | (opcode[1]);
+		WriteMem(state, offset, state->a);
+		state->pc += 2;
+	}
+	break;
+	case 0x33: 							//INX    SP
+		state->sp++;
+		break;
+	case 0x34: 							//INR	M
+	{
+		uint8_t res = ReadFromHL(state) + 1;
+		FlagsZSP(state, res);
+		WriteToHL(state, res);
+	}
+	break;
+	case 0x35: 							//DCR    M
+	{
+		uint8_t res = ReadFromHL(state) - 1;
+		FlagsZSP(state, res);
+		WriteToHL(state, res);
+	}
+	break;
+	case 0x36: 							//MVI	M,byte
+	{
+		WriteToHL(state, opcode[1]);
+		state->pc++;
+	}
+	break;
+	case 0x37: state->cc.cy = 1; break;
+	case 0x38: UnimplementedInstruction(state); break;
+	case 0x39: 							//DAD    SP
+	{
+		uint32_t hl = (state->h << 8) | state->l;
+		uint32_t res = hl + state->sp;
+		state->h = (res & 0xff00) >> 8;
+		state->l = res & 0xff;
+		state->cc.cy = ((res & 0xffff0000) > 0);
+	}
+	break;
+	case 0x3a: 							//LDA    (word)
+	{
+		uint16_t offset = (opcode[2] << 8) | (opcode[1]);
+		state->a = state->memory[offset];
+		state->pc += 2;
+	}
+	break;
+	case 0x3b: 							//DCX SP
+		state->sp -= 1;
+		break;
+	case 0x3c: 							//INR A
+		state->a += 1;
+		FlagsZSP(state, state->a);
+		break;
+	case 0x3d:							//DCR A
+		state->a -= 1;
+		FlagsZSP(state, state->a);
+		break;
+	case 0x3e: 							//MVI    A,byte
+		state->a = opcode[1];
+		state->pc++;
+		break;
+	case 0x3f: state->cc.cy = 0; break;
+
+	case 0x40: state->b = state->b; break;
+	case 0x41: state->b = state->c; break;
+	case 0x42: state->b = state->d; break;
+	case 0x43: state->b = state->e; break;
+	case 0x44: state->b = state->h; break;
+	case 0x45: state->b = state->l; break;
+	case 0x46: state->b = ReadFromHL(state); break;
+	case 0x47: state->b = state->a; break;
+
+	case 0x48: state->c = state->b; break;
+	case 0x49: state->c = state->c; break;
+	case 0x4a: state->c = state->d; break;
+	case 0x4b: state->c = state->e; break;
+	case 0x4c: state->c = state->h; break;
+	case 0x4d: state->c = state->l; break;
+	case 0x4e: state->c = ReadFromHL(state); break;
+	case 0x4f: state->c = state->a; break;
+
+	case 0x50: state->d = state->b; break;
+	case 0x51: state->d = state->c; break;
+	case 0x52: state->d = state->d; break;
+	case 0x53: state->d = state->e; break;
+	case 0x54: state->d = state->h; break;
+	case 0x55: state->d = state->l; break;
+	case 0x56: state->d = ReadFromHL(state); break;
+	case 0x57: state->d = state->a; break;
+
+	case 0x58: state->e = state->b; break;
+	case 0x59: state->e = state->c; break;
+	case 0x5a: state->e = state->d; break;
+	case 0x5b: state->e = state->e; break;
+	case 0x5c: state->e = state->h; break;
+	case 0x5d: state->e = state->l; break;
+	case 0x5e: state->e = ReadFromHL(state); break;
+	case 0x5f: state->e = state->a; break;
+
+	case 0x60: state->h = state->b; break;
+	case 0x61: state->h = state->c; break;
+	case 0x62: state->h = state->d; break;
+	case 0x63: state->h = state->e; break;
+	case 0x64: state->h = state->h; break;
+	case 0x65: state->h = state->l; break;
+	case 0x66: state->h = ReadFromHL(state); break;
+	case 0x67: state->h = state->a; break;
+
+	case 0x68: state->l = state->b; break;
+	case 0x69: state->l = state->c; break;
+	case 0x6a: state->l = state->d; break;
+	case 0x6b: state->l = state->e; break;
+	case 0x6c: state->l = state->h; break;
+	case 0x6d: state->l = state->l; break;
+	case 0x6e: state->l = ReadFromHL(state); break;
+	case 0x6f: state->l = state->a; break;
+
+	case 0x70: WriteToHL(state, state->b); break;		//MOV    M,B
+	case 0x71: WriteToHL(state, state->c); break;		//MOV    M,C
+	case 0x72: WriteToHL(state, state->d); break;		//MOV    M,D
+	case 0x73: WriteToHL(state, state->e); break;		//MOV    M,E
+	case 0x74: WriteToHL(state, state->h); break;		//MOV    M,H
+	case 0x75: WriteToHL(state, state->l); break;		//MOV    M,L
+	case 0x76:  break;                                  //HLT
+	case 0x77: WriteToHL(state, state->a); break;		//MOV    M,A
+
+	case 0x78: state->a = state->b; break;
+	case 0x79: state->a = state->c; break;
+	case 0x7a: state->a = state->d;  break;
+	case 0x7b: state->a = state->e;  break;
+	case 0x7c: state->a = state->h;  break;
+	case 0x7d: state->a = state->l;  break;
+	case 0x7e: state->a = ReadFromHL(state); break;
+	case 0x7f: break;
+
+	case 0x80: { uint16_t res = (uint16_t)state->a + (uint16_t)state->b; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADD B
+	case 0x81: { uint16_t res = (uint16_t)state->a + (uint16_t)state->c; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADD C
+	case 0x82: { uint16_t res = (uint16_t)state->a + (uint16_t)state->d; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADD D
+	case 0x83: { uint16_t res = (uint16_t)state->a + (uint16_t)state->e; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADD E
+	case 0x84: { uint16_t res = (uint16_t)state->a + (uint16_t)state->h; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADD H
+	case 0x85: { uint16_t res = (uint16_t)state->a + (uint16_t)state->l; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADD L
+	case 0x86:  					//ADD M
+	{
+		uint16_t res = (uint16_t)state->a + (uint16_t)ReadFromHL(state);
+		ArithFlagsA(state, res);
+		state->a = (res & 0xff);
+	} break;
+	case 0x87: { uint16_t res = (uint16_t)state->a + (uint16_t)state->a; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADC A
+
+	case 0x88: { uint16_t res = (uint16_t)state->a + (uint16_t)state->b + state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADC B
+	case 0x89: { uint16_t res = (uint16_t)state->a + (uint16_t)state->c + state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADC C
+	case 0x8a: { uint16_t res = (uint16_t)state->a + (uint16_t)state->d + state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADC D
+	case 0x8b: { uint16_t res = (uint16_t)state->a + (uint16_t)state->e + state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADC E
+	case 0x8c: { uint16_t res = (uint16_t)state->a + (uint16_t)state->h + state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADC H
+	case 0x8d: { uint16_t res = (uint16_t)state->a + (uint16_t)state->l + state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADC L
+	case 0x8e: 					//ADC M
+	{
+		uint16_t res = (uint16_t)state->a + (uint16_t)ReadFromHL(state) + state->cc.cy;
+		ArithFlagsA(state, res);
+		state->a = (res & 0xff);
+	} break;
+	case 0x8f: { uint16_t res = (uint16_t)state->a + (uint16_t)state->a + state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //ADC A
+
+
+	case 0x90: { uint16_t res = (uint16_t)state->a - (uint16_t)state->b; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SUB B
+	case 0x91: { uint16_t res = (uint16_t)state->a - (uint16_t)state->c; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SUB C
+	case 0x92: { uint16_t res = (uint16_t)state->a - (uint16_t)state->d; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SUB D
+	case 0x93: { uint16_t res = (uint16_t)state->a - (uint16_t)state->e; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SUB E
+	case 0x94: { uint16_t res = (uint16_t)state->a - (uint16_t)state->h; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SUB H
+	case 0x95: { uint16_t res = (uint16_t)state->a - (uint16_t)state->l; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SUB L
+	case 0x96:  					//SUB M
+	{
+		uint16_t res = (uint16_t)state->a - (uint16_t)ReadFromHL(state);
+		ArithFlagsA(state, res);
+		state->a = (res & 0xff);
+	} break;
+	case 0x97: { uint16_t res = (uint16_t)state->a - (uint16_t)state->a; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SUB A
+
+	case 0x98: { uint16_t res = (uint16_t)state->a - (uint16_t)state->b - state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SBB B
+	case 0x99: { uint16_t res = (uint16_t)state->a - (uint16_t)state->c - state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SBB C
+	case 0x9a: { uint16_t res = (uint16_t)state->a - (uint16_t)state->d - state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SBB D
+	case 0x9b: { uint16_t res = (uint16_t)state->a - (uint16_t)state->e - state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SBB E
+	case 0x9c: { uint16_t res = (uint16_t)state->a - (uint16_t)state->h - state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SBB H
+	case 0x9d: { uint16_t res = (uint16_t)state->a - (uint16_t)state->l - state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SBB L
+	case 0x9e: 					//SBB M
+	{
+		uint16_t res = (uint16_t)state->a - (uint16_t)ReadFromHL(state) - state->cc.cy;
+		ArithFlagsA(state, res);
+		state->a = (res & 0xff);
+	} break;
+	case 0x9f: { uint16_t res = (uint16_t)state->a - (uint16_t)state->a - state->cc.cy; ArithFlagsA(state, res); state->a = (res & 0xff); } break;  //SBB A
+
+	case 0xa0: state->a = state->a & state->b; LogicFlagsA(state);	break;
+	case 0xa1: state->a = state->a & state->c; LogicFlagsA(state);	break;
+	case 0xa2: state->a = state->a & state->d; LogicFlagsA(state);	break;
+	case 0xa3: state->a = state->a & state->e; LogicFlagsA(state);	break;
+	case 0xa4: state->a = state->a & state->h; LogicFlagsA(state);	break;
+	case 0xa5: state->a = state->a & state->l; LogicFlagsA(state);	break;
+	case 0xa6: state->a = state->a & ReadFromHL(state); LogicFlagsA(state);	break;
+	case 0xa7: state->a = state->a & state->a; LogicFlagsA(state);	break;
+
+	case 0xa8: state->a = state->a ^ state->b; LogicFlagsA(state);	break;
+	case 0xa9: state->a = state->a ^ state->c; LogicFlagsA(state);	break;
+	case 0xaa: state->a = state->a ^ state->d; LogicFlagsA(state);	break;
+	case 0xab: state->a = state->a ^ state->e; LogicFlagsA(state);	break;
+	case 0xac: state->a = state->a ^ state->h; LogicFlagsA(state);	break;
+	case 0xad: state->a = state->a ^ state->l; LogicFlagsA(state);	break;
+	case 0xae: state->a = state->a ^ ReadFromHL(state); LogicFlagsA(state);	break;
+	case 0xaf: state->a = state->a ^ state->a; LogicFlagsA(state);	break;
+
+	case 0xb0: state->a = state->a | state->b; LogicFlagsA(state);	break;
+	case 0xb1: state->a = state->a | state->c; LogicFlagsA(state);	break;
+	case 0xb2: state->a = state->a | state->d; LogicFlagsA(state);	break;
+	case 0xb3: state->a = state->a | state->e; LogicFlagsA(state);	break;
+	case 0xb4: state->a = state->a | state->h; LogicFlagsA(state);	break;
+	case 0xb5: state->a = state->a | state->l; LogicFlagsA(state);	break;
+	case 0xb6: state->a = state->a | ReadFromHL(state); LogicFlagsA(state);	break;
+	case 0xb7: state->a = state->a | state->a; LogicFlagsA(state);	break;
+
+	case 0xb8: { uint16_t res = (uint16_t)state->a - (uint16_t)state->b; ArithFlagsA(state, res); } break;  //CMP B
+	case 0xb9: { uint16_t res = (uint16_t)state->a - (uint16_t)state->c; ArithFlagsA(state, res); } break;  //CMP C
+	case 0xba: { uint16_t res = (uint16_t)state->a - (uint16_t)state->d; ArithFlagsA(state, res); } break;  //CMP D
+	case 0xbb: { uint16_t res = (uint16_t)state->a - (uint16_t)state->e; ArithFlagsA(state, res); } break;  //CMP E
+	case 0xbc: { uint16_t res = (uint16_t)state->a - (uint16_t)state->h; ArithFlagsA(state, res); } break;  //CMP H
+	case 0xbd: { uint16_t res = (uint16_t)state->a - (uint16_t)state->l; ArithFlagsA(state, res); } break;  //CMP L
+	case 0xbe: { uint16_t res = (uint16_t)state->a - (uint16_t)ReadFromHL(state); ArithFlagsA(state, res); } break;  //CMP L
+	case 0xbf: { uint16_t res = (uint16_t)state->a - (uint16_t)state->a; ArithFlagsA(state, res); } break;  //CMP A
+
+	case 0xc0:						//RNZ
+		if (state->cc.z == 0)
+		{
+			state->pc = state->memory[state->sp] | (state->memory[state->sp + 1] << 8);
+			state->sp += 2;
+		}
+		break;
+
+	case 0xc1: 						//POP    B
+		Pop(state, &state->b, &state->c);
+		break;
+	case 0xc2: 						//JNZ address
+		if (0 == state->cc.z)
+			state->pc = (opcode[2] << 8) | opcode[1];
+		else
+			state->pc += 2;
+		break;
+	case 0xc3:						//JMP address
+		state->pc = (opcode[2] << 8) | opcode[1];
+		break;
+	case 0xc4: 						//CNZ adr
+		if (state->cc.z == 0)
+		{
+			uint16_t	ret = state->pc + 2;
+			WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+			WriteMem(state, state->sp - 2, (ret & 0xff));
+			state->sp = state->sp - 2;
+			state->pc = (opcode[2] << 8) | opcode[1];
+		}
+		else
+			state->pc += 2;
+		break;
+
+	case 0xc5: 						//PUSH   B
+		Push(state, state->b, state->c);
+		break;
+	case 0xc6: 						//ADI    byte
+	{
+		uint16_t x = (uint16_t)state->a + (uint16_t)opcode[1];
+		FlagsZSP(state, x & 0xff);
+		state->cc.cy = (x > 0xff);
+		state->a = x & 0xff;
+		state->pc++;
+	}
+	break;
+	case 0xc7: 					//RST 0
+	{
+		uint16_t	ret = state->pc + 2;
+		WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+		WriteMem(state, state->sp - 2, (ret & 0xff));
+		state->sp = state->sp - 2;
+		state->pc = 0x0000;
+	}
+	break;
+	case 0xc8: 					//RZ
+		if (state->cc.z)
+		{
+			state->pc = state->memory[state->sp] | (state->memory[state->sp + 1] << 8);
+			state->sp += 2;
+		}
+		break;
+	case 0xc9: 						//RET
+		state->pc = state->memory[state->sp] | (state->memory[state->sp + 1] << 8);
+		state->sp += 2;
+		break;
+	case 0xca: 						//JZ adr
+		if (state->cc.z)
+			state->pc = (opcode[2] << 8) | opcode[1];
+		else
+			state->pc += 2;
+		break;
+	case 0xcb: UnimplementedInstruction(state); break;
+	case 0xcc: 						//CZ adr
+		if (state->cc.z == 1)
+		{
+			uint16_t	ret = state->pc + 2;
+			WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+			WriteMem(state, state->sp - 2, (ret & 0xff));
+			state->sp = state->sp - 2;
+			state->pc = (opcode[2] << 8) | opcode[1];
+		}
+		else
+			state->pc += 2;
+		break;
+	case 0xcd: 						//CALL address
+	{
+		uint16_t	ret = state->pc + 2;
+		WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+		WriteMem(state, state->sp - 2, (ret & 0xff));
+		state->sp = state->sp - 2;
+		state->pc = (opcode[2] << 8) | opcode[1];
+	}
+	break;
+	case 0xce:					//ACI  byte 
+	{
+		uint16_t x = state->a + opcode[1] + state->cc.cy;
+		FlagsZSP(state, x & 0xff);
+		state->cc.cy = (x > 0xff);
+		state->a = x & 0xff;
+		state->pc++;
+	}
+	break;
+	case 0xcf: 					//RST 1
+	{
+		uint16_t	ret = state->pc + 2;
+		WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+		WriteMem(state, state->sp - 2, (ret & 0xff));
+		state->sp = state->sp - 2;
+		state->pc = 0x0008;
+	}
+	break;
+
+	case 0xd0:					//RNC
+		if (state->cc.cy == 0)
+		{
+			state->pc = state->memory[state->sp] | (state->memory[state->sp + 1] << 8);
+			state->sp += 2;
+		}
+		break;
+	case 0xd1: 						//POP    D
+		Pop(state, &state->d, &state->e);
+		break;
+	case 0xd2:						//JNC
+		if (state->cc.cy == 0)
+			state->pc = (opcode[2] << 8) | opcode[1];
+		else
+			state->pc += 2;
+		break;
+	case 0xd3:                      //OUT d8
+		state->pc++;
+		break;
+	case 0xd4:						//CNC adr
+		if (state->cc.cy == 0)
+		{
+			uint16_t	ret = state->pc + 2;
+			WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+			WriteMem(state, state->sp - 2, (ret & 0xff));
+			state->sp = state->sp - 2;
+			state->pc = (opcode[2] << 8) | opcode[1];
+		}
+		else
+			state->pc += 2;
+		break;
+	case 0xd5: 						//PUSH   D
+		Push(state, state->d, state->e);
+		break;
+	case 0xd6: 						//SUI    byte
+	{
+		uint8_t x = state->a - opcode[1];
+		FlagsZSP(state, x & 0xff);
+		state->cc.cy = (state->a < opcode[1]);
+		state->a = x;
+		state->pc++;
+	}
+	break;
+	case 0xd7: 					//RST 2
+	{
+		uint16_t	ret = state->pc + 2;
+		WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+		WriteMem(state, state->sp - 2, (ret & 0xff));
+		state->sp = state->sp - 2;
+		state->pc = 0x10;
+	}
+	break;
+	case 0xd8: 					//RC
+		if (state->cc.cy != 0)
+		{
+			state->pc = state->memory[state->sp] | (state->memory[state->sp + 1] << 8);
+			state->sp += 2;
+		}
+		break;
+	case 0xd9: UnimplementedInstruction(state); break;
+	case 0xda: 					//JC
+		if (state->cc.cy != 0)
+			state->pc = (opcode[2] << 8) | opcode[1];
+		else
+			state->pc += 2;
+		break;
+	case 0xdb: 					//IN d8
+		state->pc++;
+		break;
+	case 0xdc: 					//CC adr
+		if (state->cc.cy != 0)
+		{
+			uint16_t	ret = state->pc + 2;
+			WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+			WriteMem(state, state->sp - 2, (ret & 0xff));
+			state->sp = state->sp - 2;
+			state->pc = (opcode[2] << 8) | opcode[1];
+		}
+		else
+			state->pc += 2;
+		break;
+	case 0xdd: UnimplementedInstruction(state); break;
+	case 0xde: 					//SBI byte
+	{
+		uint16_t x = state->a - opcode[1] - state->cc.cy;
+		FlagsZSP(state, x & 0xff);
+		state->cc.cy = (x > 0xff);
+		state->a = x & 0xff;
+		state->pc++;
+	}
+	break;
+	case 0xdf: 					//RST 3
+	{
+		uint16_t	ret = state->pc + 2;
+		WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+		WriteMem(state, state->sp - 2, (ret & 0xff));
+		state->sp = state->sp - 2;
+		state->pc = 0x18;
+	}
+	break;
+
+	case 0xe0:					//RPO
+		if (state->cc.p == 0)
+		{
+			state->pc = state->memory[state->sp] | (state->memory[state->sp + 1] << 8);
+			state->sp += 2;
+		}
+		break;
+	case 0xe1: 					//POP    H
+		Pop(state, &state->h, &state->l);
+		break;
+	case 0xe2: 						//JPO
+		if (state->cc.p == 0)
+			state->pc = (opcode[2] << 8) | opcode[1];
+		else
+			state->pc += 2;
+		break;
+	case 0xe3:						//XTHL 
+	{
+		uint8_t h = state->h;
+		uint8_t l = state->l;
+		state->l = state->memory[state->sp];
+		state->h = state->memory[state->sp + 1];
+		WriteMem(state, state->sp, l);
+		WriteMem(state, state->sp + 1, h);
+	}
+	break;
+	case 0xe4: 						//CPO adr
+		if (state->cc.p == 0)
+		{
+			uint16_t	ret = state->pc + 2;
+			WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+			WriteMem(state, state->sp - 2, (ret & 0xff));
+			state->sp = state->sp - 2;
+			state->pc = (opcode[2] << 8) | opcode[1];
+		}
+		else
+			state->pc += 2;
+		break;
+	case 0xe5: 						//PUSH   H
+		Push(state, state->h, state->l);
+		break;
+	case 0xe6: 						//ANI    byte
+	{
+		state->a = state->a & opcode[1];
+		LogicFlagsA(state);
+		state->pc++;
+	}
+	break;
+	case 0xe7: 					//RST 4
+	{
+		uint16_t	ret = state->pc + 2;
+		WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+		WriteMem(state, state->sp - 2, (ret & 0xff));
+		state->sp = state->sp - 2;
+		state->pc = 0x20;
+	}
+	break;
+	case 0xe8: 					//RPE
+		if (state->cc.p != 0)
+		{
+			state->pc = state->memory[state->sp] | (state->memory[state->sp + 1] << 8);
+			state->sp += 2;
+		}
+		break;
+	case 0xe9: 						//PCHL
+		state->pc = (state->h << 8) | state->l;
+		break;
+	case 0xea: 						//JPE
+		if (state->cc.p != 0)
+			state->pc = (opcode[2] << 8) | opcode[1];
+		else
+			state->pc += 2;
+		break;
+	case 0xeb: 					//XCHG
+	{
+		uint8_t save1 = state->d;
+		uint8_t save2 = state->e;
+		state->d = state->h;
+		state->e = state->l;
+		state->h = save1;
+		state->l = save2;
+	}
+	break;
+	case 0xec: 					//CPE adr
+		if (state->cc.p != 0)
+		{
+			uint16_t	ret = state->pc + 2;
+			WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+			WriteMem(state, state->sp - 2, (ret & 0xff));
+			state->sp = state->sp - 2;
+			state->pc = (opcode[2] << 8) | opcode[1];
+		}
+		else
+			state->pc += 2;
+		break;
+	case 0xed: UnimplementedInstruction(state); break;
+	case 0xee: 					//XRI data
+	{
+		uint8_t x = state->a ^ opcode[1];
+		FlagsZSP(state, x);
+		state->cc.cy = 0;		//data book says clear cy
+		state->a = x;
+		state->pc++;
+	}
+	break;
+	case 0xef: 					//RST 5
+	{
+		uint16_t	ret = state->pc + 2;
+		WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+		WriteMem(state, state->sp - 2, (ret & 0xff));
+		state->sp = state->sp - 2;
+		state->pc = 0x28;
+	}
+	break;
+
+	case 0xf0: 					//RP
+		if (state->cc.s == 0)
+		{
+			state->pc = state->memory[state->sp] | (state->memory[state->sp + 1] << 8);
+			state->sp += 2;
+		}
+		break;
+	case 0xf1: 					//POP PSW
+		Pop(state, &state->a, (unsigned char*)&state->cc);
+		break;
+	case 0xf2:
+		if (state->cc.s == 0)
+			state->pc = (opcode[2] << 8) | opcode[1];
+		else
+			state->pc += 2;
+		break;
+	case 0xf3: state->int_enable = 0;  break;
+	case 0xf4: 						//CP
+		if (state->cc.s == 0)
+		{
+			uint16_t	ret = state->pc + 2;
+			WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+			WriteMem(state, state->sp - 2, (ret & 0xff));
+			state->sp = state->sp - 2;
+			state->pc = (opcode[2] << 8) | opcode[1];
+		}
+		else
+			state->pc += 2;
+		break;
+
+	case 0xf5: 						//PUSH   PSW
+		Push(state, state->a, *(unsigned char*)&state->cc);
+		break;
+
+	case 0xf6: 						//ORI    byte
+	{
+		//AC set if lower nibble of h was zero prior to dec
+		uint8_t x = state->a | opcode[1];
+		FlagsZSP(state, x);
+		state->cc.cy = 0;
+		state->a = x;
+		state->pc++;
+	}
+	break;
+	case 0xf7: 					//RST 6
+	{
+		uint16_t	ret = state->pc + 2;
+		WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+		WriteMem(state, state->sp - 2, (ret & 0xff));
+		state->sp = state->sp - 2;
+		state->pc = 0x30;
+	}
+	break;
+	case 0xf8:					//RM
+		if (state->cc.s != 0)
+		{
+			state->pc = state->memory[state->sp] | (state->memory[state->sp + 1] << 8);
+			state->sp += 2;
+		}
+		break;
+	case 0xf9: 					//SPHL
+		state->sp = state->l | (state->h << 8);
+		break;
+	case 0xfa: 					//JM
+		if (state->cc.s != 0)
+			state->pc = (opcode[2] << 8) | opcode[1];
+		else
+			state->pc += 2;
+		break;
+	case 0xfb: state->int_enable = 1;  break;
+	case 0xfc: 					//CM
+		if (state->cc.s != 0)
+		{
+			uint16_t	ret = state->pc + 2;
+			WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+			WriteMem(state, state->sp - 2, (ret & 0xff));
+			state->sp = state->sp - 2;
+			state->pc = (opcode[2] << 8) | opcode[1];
+		}
+		else
+			state->pc += 2;
+		break;
+
+	case 0xfd: UnimplementedInstruction(state); break;
+	case 0xfe: 						//CPI  byte
+	{
+		uint8_t x = state->a - opcode[1];
+		FlagsZSP(state, x);
+		state->cc.cy = (state->a < opcode[1]);
+		state->pc++;
+	}
+	break;
+	case 0xff: 					//RST 7
+	{
+		uint16_t	ret = state->pc + 2;
+		WriteMem(state, state->sp - 1, (ret >> 8) & 0xff);
+		WriteMem(state, state->sp - 2, (ret & 0xff));
+		state->sp = state->sp - 2;
+		state->pc = 0x38;
+	}
+	break;
+	}
+
+#if PRINTOPS
+	printf("\t");
+	printf("%c", state->cc.z ? 'z' : '.');
+	printf("%c", state->cc.s ? 's' : '.');
+	printf("%c", state->cc.p ? 'p' : '.');
+	printf("%c", state->cc.cy ? 'c' : '.');
+	printf("%c  ", state->cc.ac ? 'a' : '.');
+	printf("A $%02x B $%02x C $%02x D $%02x E $%02x H $%02x L $%02x SP %04x\n", state->a, state->b, state->c,
+		state->d, state->e, state->h, state->l, state->sp);
+#endif
+	return cycles8080[*opcode];
 }
 
-static inline uint16_t i8080_get_hl(i8080* const c) {
-    return (c->h << 8) | c->l;
+void GenerateInterrupt(State8080* state, int interrupt_num)
+{
+	//perform "PUSH PC"
+	Push(state, (state->pc & 0xFF00) >> 8, (state->pc & 0xff));
+
+	//Set the PC to the low memory vector
+	state->pc = 8 * interrupt_num;
+
+	//"DI"
+	state->int_enable = 0;
 }
 
-// stack helpers
+void ReadFileIntoMemoryAt(State8080* state, char* filename, uint32_t offset)
+{
+	FILE* f = fopen(filename, "rb");
+	if (f == NULL)
+	{
+		printf("error: Couldn't open %s\n", filename);
+		exit(1);
+	}
+	fseek(f, 0L, SEEK_END);
+	int fsize = ftell(f);
+	fseek(f, 0L, SEEK_SET);
 
-// pushes a value into the stack and updates the stack pointer
-static inline void i8080_push_stack(i8080* const c, uint16_t val) {
-    c->sp -= 2;
-    i8080_ww(c, c->sp, val);
+	uint8_t* buffer = &state->memory[offset];
+	fread(buffer, fsize, 1, f);
+	fclose(f);
 }
 
-// pops a value from the stack and updates the stack pointer
-static inline uint16_t i8080_pop_stack(i8080* const c) {
-    uint16_t val = i8080_rw(c, c->sp);
-    c->sp += 2;
-    return val;
+State8080* Init8080(void)
+{
+	State8080* state = calloc(1, sizeof(State8080));
+	state->memory = malloc(0x10000);  //16K
+	return state;
 }
 
-// opcodes
 
-// returns the parity of byte: 0 if number of 1 bits in `val` is odd, else 1
-static inline bool parity(uint8_t val) {
-    uint8_t nb_one_bits = 0;
-    for (int i = 0; i < 8; i++) {
-        nb_one_bits += ((val >> i) & 1);
-    }
+int main(int argc, char** argv)
+{
+	int done = 0;
+	int vblankcycles = 0;
+	State8080* state = Init8080();
 
-    return (nb_one_bits & 1) == 0;
+	ReadFileIntoMemoryAt(state, "invaders.h", 0);
+	ReadFileIntoMemoryAt(state, "invaders.g", 0x800);
+	ReadFileIntoMemoryAt(state, "invaders.f", 0x1000);
+	ReadFileIntoMemoryAt(state, "invaders.e", 0x1800);
+
+	while (done < 3000)
+	{
+		Emulate8080Op(state);
+		done++;
+	}
+	return 0;
 }
-
-// returns if there was a carry between bit "bit_no" and "bit_no - 1" when
-// executing "a + b + cy"
-static inline bool carry(int bit_no, uint8_t a, uint8_t b, bool cy) {
-    int16_t result = a + b + cy;
-    int16_t carry = result ^ a ^ b;
-    return carry & (1 << bit_no);
-}
-
-// adds a value (+ an optional carry flag) to a register
-static inline void i8080_add(
-    i8080* const c, uint8_t* const reg, uint8_t val, bool cy) {
-    uint8_t result = *reg + val + cy;
-    c->cf = carry(8, *reg, val, cy);
-    c->hf = carry(4, *reg, val, cy);
-    SET_ZSP(c, result);
-    *reg = result;
-}
-
-// substracts a byte (+ an optional carry flag) from a register
-// see https://stackoverflow.com/a/8037485
-static inline void i8080_sub(
-    i8080* const c, uint8_t* const reg, uint8_t val, bool cy) {
-    i8080_add(c, reg, ~val, !cy);
-    c->cf = !c->cf;
-}
-
-// adds a word to HL
-static inline void i8080_dad(i8080* const c, uint16_t val) {
-    c->cf = ((i8080_get_hl(c) + val) >> 16) & 1;
-    i8080_set_hl(c, i8080_get_hl(c) + val);
-}
-
-// increments a byte
-static inline uint8_t i8080_inr(i8080* const c, uint8_t val) {
-    uint8_t result = val + 1;
-    c->hf = (result & 0xF) == 0;
-    SET_ZSP(c, result);
-    return result;
-}
-
-// decrements a byte
-static inline uint8_t i8080_dcr(i8080* const c, uint8_t val) {
-    uint8_t result = val - 1;
-    c->hf = !((result & 0xF) == 0xF);
-    SET_ZSP(c, result);
-    return result;
-}
-
-// executes a logic "and" between register A and a byte, then stores the
-// result in register A
-static inline void i8080_ana(i8080* const c, uint8_t val) {
-    uint8_t result = c->a & val;
-    c->cf = 0;
-    c->hf = ((c->a | val) & 0x08) != 0;
-    SET_ZSP(c, result);
-    c->a = result;
-}
-
-// executes a logic "xor" between register A and a byte, then stores the
-// result in register A
-static inline void i8080_xra(i8080* const c, uint8_t val) {
-    c->a ^= val;
-    c->cf = 0;
-    c->hf = 0;
-    SET_ZSP(c, c->a);
-}
-
-// executes a logic "or" between register A and a byte, then stores the
-// result in register A
-static inline void i8080_ora(i8080* const c, uint8_t val) {
-    c->a |= val;
-    c->cf = 0;
-    c->hf = 0;
-    SET_ZSP(c, c->a);
-}
-
-// compares the register A to another byte
-static inline void i8080_cmp(i8080* const c, uint8_t val) {
-    int16_t result = c->a - val;
-    c->cf = result >> 8;
-    c->hf = ~(c->a ^ result ^ val) & 0x10;
-    SET_ZSP(c, result & 0xFF);
-}
-
-// sets the program counter to a given address
-static inline void i8080_jmp(i8080* const c, uint16_t addr) {
-    c->pc = addr;
-}
-
-// jumps to next address pointed by the next word in memory if a condition
-// is met
-static inline void i8080_cond_jmp(i8080* const c, bool condition) {
-    uint16_t addr = i8080_next_word(c);
-    if (condition) {
-        c->pc = addr;
-    }
-}
-
-// pushes the current pc to the stack, then jumps to an address
-static inline void i8080_call(i8080* const c, uint16_t addr) {
-    i8080_push_stack(c, c->pc);
-    i8080_jmp(c, addr);
-}
-
-// calls to next word in memory if a condition is met
-static inline void i8080_cond_call(i8080* const c, bool condition) {
-    uint16_t addr = i8080_next_word(c);
-    if (condition) {
-        i8080_call(c, addr);
-        c->cyc += 6;
-    }
-}
-
-// returns from subroutine
-static inline void i8080_ret(i8080* const c) {
-    c->pc = i8080_pop_stack(c);
-}
-
-// returns from subroutine if a condition is met
-static inline void i8080_cond_ret(i8080* const c, bool condition) {
-    if (condition) {
-        i8080_ret(c);
-        c->cyc += 6;
-    }
-}
-
-// pushes register A and the flags into the stack
-static inline void i8080_push_psw(i8080* const c) {
-    // note: bit 3 and 5 are always 0
-    uint8_t psw = 0;
-    psw |= c->sf << 7;
-    psw |= c->zf << 6;
-    psw |= c->hf << 4;
-    psw |= c->pf << 2;
-    psw |= 1 << 1; // bit 1 is always 1
-    psw |= c->cf << 0;
-    i8080_push_stack(c, c->a << 8 | psw);
-}
-
-// pops register A and the flags from the stack
-static inline void i8080_pop_psw(i8080* const c) {
-    uint16_t af = i8080_pop_stack(c);
-    c->a = af >> 8;
-    uint8_t psw = af & 0xFF;
-
-    c->sf = (psw >> 7) & 1;
-    c->zf = (psw >> 6) & 1;
-    c->hf = (psw >> 4) & 1;
-    c->pf = (psw >> 2) & 1;
-    c->cf = (psw >> 0) & 1;
-}
-
-// rotate register A left
-static inline void i8080_rlc(i8080* const c) {
-    c->cf = c->a >> 7;
-    c->a = (c->a << 1) | c->cf;
-}
-
-// rotate register A right
-static inline void i8080_rrc(i8080* const c) {
-    c->cf = c->a & 1;
-    c->a = (c->a >> 1) | (c->cf << 7);
-}
-
-// rotate register A left with the carry flag
-static inline void i8080_ral(i8080* const c) {
-    bool cy = c->cf;
-    c->cf = c->a >> 7;
-    c->a = (c->a << 1) | cy;
-}
-
-// rotate register A right with the carry flag
-static inline void i8080_rar(i8080* const c) {
-    bool cy = c->cf;
-    c->cf = c->a & 1;
-    c->a = (c->a >> 1) | (cy << 7);
-}
-
-// Decimal Adjust Accumulator: the eight-bit number in register A is adjusted
-// to form two four-bit binary-coded-decimal digits.
-// For example, if A=$2B and DAA is executed, A becomes $31.
-static inline void i8080_daa(i8080* const c) {
-    bool cy = c->cf;
-    uint8_t correction = 0;
-
-    uint8_t lsb = c->a & 0x0F;
-    uint8_t msb = c->a >> 4;
-
-    if (c->hf || lsb > 9) {
-        correction += 0x06;
-    }
-
-    if (c->cf || msb > 9 || (msb >= 9 && lsb > 9)) {
-        correction += 0x60;
-        cy = 1;
-    }
-
-    i8080_add(c, &c->a, correction, 0);
-    c->cf = cy;
-}
-
-// switches the value of registers DE and HL
-static inline void i8080_xchg(i8080* const c) {
-    uint16_t de = i8080_get_de(c);
-    i8080_set_de(c, i8080_get_hl(c));
-    i8080_set_hl(c, de);
-}
-
-// switches the value of a word at (sp) and HL
-static inline void i8080_xthl(i8080* const c) {
-    uint16_t val = i8080_rw(c, c->sp);
-    i8080_ww(c, c->sp, i8080_get_hl(c));
-    i8080_set_hl(c, val);
-}
-
-// executes one opcode
-static inline void i8080_execute(i8080* const c, uint8_t opcode) {
-    c->cyc += OPCODES_CYCLES[opcode];
-
-    // when DI is executed, interrupts won't be serviced
-    // until the end of next instruction:
-    if (c->interrupt_delay > 0) {
-        c->interrupt_delay -= 1;
-    }
-
-    switch (opcode) {
-    case 0x7F: c->a = c->a; break; // MOV A,A
-    case 0x78: c->a = c->b; break; // MOV A,B
-    case 0x79: c->a = c->c; break; // MOV A,C
-    case 0x7A: c->a = c->d; break; // MOV A,D
-    case 0x7B: c->a = c->e; break; // MOV A,E
-    case 0x7C: c->a = c->h; break; // MOV A,H
-    case 0x7D: c->a = c->l; break; // MOV A,L
-    case 0x7E: c->a = i8080_rb(c, i8080_get_hl(c)); break; // MOV A,M
-
-    case 0x0A: c->a = i8080_rb(c, i8080_get_bc(c)); break; // LDAX B
-    case 0x1A: c->a = i8080_rb(c, i8080_get_de(c)); break; // LDAX D
-    case 0x3A: c->a = i8080_rb(c, i8080_next_word(c)); break; // LDA word
-
-    case 0x47: c->b = c->a; break; // MOV B,A
-    case 0x40: c->b = c->b; break; // MOV B,B
-    case 0x41: c->b = c->c; break; // MOV B,C
-    case 0x42: c->b = c->d; break; // MOV B,D
-    case 0x43: c->b = c->e; break; // MOV B,E
-    case 0x44: c->b = c->h; break; // MOV B,H
-    case 0x45: c->b = c->l; break; // MOV B,L
-    case 0x46: c->b = i8080_rb(c, i8080_get_hl(c)); break; // MOV B,M
-
-    case 0x4F: c->c = c->a; break; // MOV C,A
-    case 0x48: c->c = c->b; break; // MOV C,B
-    case 0x49: c->c = c->c; break; // MOV C,C
-    case 0x4A: c->c = c->d; break; // MOV C,D
-    case 0x4B: c->c = c->e; break; // MOV C,E
-    case 0x4C: c->c = c->h; break; // MOV C,H
-    case 0x4D: c->c = c->l; break; // MOV C,L
-    case 0x4E: c->c = i8080_rb(c, i8080_get_hl(c)); break; // MOV C,M
-
-    case 0x57: c->d = c->a; break; // MOV D,A
-    case 0x50: c->d = c->b; break; // MOV D,B
-    case 0x51: c->d = c->c; break; // MOV D,C
-    case 0x52: c->d = c->d; break; // MOV D,D
-    case 0x53: c->d = c->e; break; // MOV D,E
-    case 0x54: c->d = c->h; break; // MOV D,H
-    case 0x55: c->d = c->l; break; // MOV D,L
-    case 0x56: c->d = i8080_rb(c, i8080_get_hl(c)); break; // MOV D,M
-
-    case 0x5F: c->e = c->a; break; // MOV E,A
-    case 0x58: c->e = c->b; break; // MOV E,B
-    case 0x59: c->e = c->c; break; // MOV E,C
-    case 0x5A: c->e = c->d; break; // MOV E,D
-    case 0x5B: c->e = c->e; break; // MOV E,E
-    case 0x5C: c->e = c->h; break; // MOV E,H
-    case 0x5D: c->e = c->l; break; // MOV E,L
-    case 0x5E: c->e = i8080_rb(c, i8080_get_hl(c)); break; // MOV E,M
-
-    case 0x67: c->h = c->a; break; // MOV H,A
-    case 0x60: c->h = c->b; break; // MOV H,B
-    case 0x61: c->h = c->c; break; // MOV H,C
-    case 0x62: c->h = c->d; break; // MOV H,D
-    case 0x63: c->h = c->e; break; // MOV H,E
-    case 0x64: c->h = c->h; break; // MOV H,H
-    case 0x65: c->h = c->l; break; // MOV H,L
-    case 0x66: c->h = i8080_rb(c, i8080_get_hl(c)); break; // MOV H,M
-
-    case 0x6F: c->l = c->a; break; // MOV L,A
-    case 0x68: c->l = c->b; break; // MOV L,B
-    case 0x69: c->l = c->c; break; // MOV L,C
-    case 0x6A: c->l = c->d; break; // MOV L,D
-    case 0x6B: c->l = c->e; break; // MOV L,E
-    case 0x6C: c->l = c->h; break; // MOV L,H
-    case 0x6D: c->l = c->l; break; // MOV L,L
-    case 0x6E: c->l = i8080_rb(c, i8080_get_hl(c)); break; // MOV L,M
-
-    case 0x77: i8080_wb(c, i8080_get_hl(c), c->a); break; // MOV M,A
-    case 0x70: i8080_wb(c, i8080_get_hl(c), c->b); break; // MOV M,B
-    case 0x71: i8080_wb(c, i8080_get_hl(c), c->c); break; // MOV M,C
-    case 0x72: i8080_wb(c, i8080_get_hl(c), c->d); break; // MOV M,D
-    case 0x73: i8080_wb(c, i8080_get_hl(c), c->e); break; // MOV M,E
-    case 0x74: i8080_wb(c, i8080_get_hl(c), c->h); break; // MOV M,H
-    case 0x75: i8080_wb(c, i8080_get_hl(c), c->l); break; // MOV M,L
-
-    case 0x3E: c->a = i8080_next_byte(c); break; // MVI A,byte
-    case 0x06: c->b = i8080_next_byte(c); break; // MVI B,byte
-    case 0x0E: c->c = i8080_next_byte(c); break; // MVI C,byte
-    case 0x16: c->d = i8080_next_byte(c); break; // MVI D,byte
-    case 0x1E: c->e = i8080_next_byte(c); break; // MVI E,byte
-    case 0x26: c->h = i8080_next_byte(c); break; // MVI H,byte
-    case 0x2E: c->l = i8080_next_byte(c); break; // MVI L,byte
-    case 0x36:
-        i8080_wb(c, i8080_get_hl(c), i8080_next_byte(c));
-        break; // MVI M,byte
-
-    case 0x02: i8080_wb(c, i8080_get_bc(c), c->a); break; // STAX B
-    case 0x12: i8080_wb(c, i8080_get_de(c), c->a); break; // STAX D
-    case 0x32: i8080_wb(c, i8080_next_word(c), c->a); break; // STA word
-
-    case 0x01: i8080_set_bc(c, i8080_next_word(c)); break; // LXI B,word
-    case 0x11: i8080_set_de(c, i8080_next_word(c)); break; // LXI D,word
-    case 0x21: i8080_set_hl(c, i8080_next_word(c)); break; // LXI H,word
-    case 0x31: c->sp = i8080_next_word(c); break; // LXI SP,word
-    case 0x2A: i8080_set_hl(c, i8080_rw(c, i8080_next_word(c))); break; // LHLD
-    case 0x22: i8080_ww(c, i8080_next_word(c), i8080_get_hl(c)); break; // SHLD
-    case 0xF9: c->sp = i8080_get_hl(c); break; // SPHL
-
-    case 0xEB: i8080_xchg(c); break; // XCHG
-    case 0xE3: i8080_xthl(c); break; // XTHL
-
-    case 0x87: i8080_add(c, &c->a, c->a, 0); break; // ADD A
-    case 0x80: i8080_add(c, &c->a, c->b, 0); break; // ADD B
-    case 0x81: i8080_add(c, &c->a, c->c, 0); break; // ADD C
-    case 0x82: i8080_add(c, &c->a, c->d, 0); break; // ADD D
-    case 0x83: i8080_add(c, &c->a, c->e, 0); break; // ADD E
-    case 0x84: i8080_add(c, &c->a, c->h, 0); break; // ADD H
-    case 0x85: i8080_add(c, &c->a, c->l, 0); break; // ADD L
-    case 0x86:
-        i8080_add(c, &c->a, i8080_rb(c, i8080_get_hl(c)), 0);
-        break; // ADD M
-    case 0xC6: i8080_add(c, &c->a, i8080_next_byte(c), 0); break; // ADI byte
-
-    case 0x8F: i8080_add(c, &c->a, c->a, c->cf); break; // ADC A
-    case 0x88: i8080_add(c, &c->a, c->b, c->cf); break; // ADC B
-    case 0x89: i8080_add(c, &c->a, c->c, c->cf); break; // ADC C
-    case 0x8A: i8080_add(c, &c->a, c->d, c->cf); break; // ADC D
-    case 0x8B: i8080_add(c, &c->a, c->e, c->cf); break; // ADC E
-    case 0x8C: i8080_add(c, &c->a, c->h, c->cf); break; // ADC H
-    case 0x8D: i8080_add(c, &c->a, c->l, c->cf); break; // ADC L
-    case 0x8E:
-        i8080_add(c, &c->a, i8080_rb(c, i8080_get_hl(c)), c->cf);
-        break; // ADC M
-    case 0xCE: i8080_add(c, &c->a, i8080_next_byte(c), c->cf); break; // ACI byte
-
-    case 0x97: i8080_sub(c, &c->a, c->a, 0); break; // SUB A
-    case 0x90: i8080_sub(c, &c->a, c->b, 0); break; // SUB B
-    case 0x91: i8080_sub(c, &c->a, c->c, 0); break; // SUB C
-    case 0x92: i8080_sub(c, &c->a, c->d, 0); break; // SUB D
-    case 0x93: i8080_sub(c, &c->a, c->e, 0); break; // SUB E
-    case 0x94: i8080_sub(c, &c->a, c->h, 0); break; // SUB H
-    case 0x95: i8080_sub(c, &c->a, c->l, 0); break; // SUB L
-    case 0x96:
-        i8080_sub(c, &c->a, i8080_rb(c, i8080_get_hl(c)), 0);
-        break; // SUB M
-    case 0xD6: i8080_sub(c, &c->a, i8080_next_byte(c), 0); break; // SUI byte
-
-    case 0x9F: i8080_sub(c, &c->a, c->a, c->cf); break; // SBB A
-    case 0x98: i8080_sub(c, &c->a, c->b, c->cf); break; // SBB B
-    case 0x99: i8080_sub(c, &c->a, c->c, c->cf); break; // SBB C
-    case 0x9A: i8080_sub(c, &c->a, c->d, c->cf); break; // SBB D
-    case 0x9B: i8080_sub(c, &c->a, c->e, c->cf); break; // SBB E
-    case 0x9C: i8080_sub(c, &c->a, c->h, c->cf); break; // SBB H
-    case 0x9D: i8080_sub(c, &c->a, c->l, c->cf); break; // SBB L
-    case 0x9E:
-        i8080_sub(c, &c->a, i8080_rb(c, i8080_get_hl(c)), c->cf);
-        break; // SBB M
-    case 0xDE: i8080_sub(c, &c->a, i8080_next_byte(c), c->cf); break; // SBI byte
-
-    case 0x09: i8080_dad(c, i8080_get_bc(c)); break; // DAD B
-    case 0x19: i8080_dad(c, i8080_get_de(c)); break; // DAD D
-    case 0x29: i8080_dad(c, i8080_get_hl(c)); break; // DAD H
-    case 0x39: i8080_dad(c, c->sp); break; // DAD SP
-
-    case 0xF3: c->iff = 0; break; // DI
-    case 0xFB:
-        c->iff = 1;
-        c->interrupt_delay = 1;
-        break; // EI
-    case 0x00: break; // NOP
-    case 0x76: c->halted = 1; break; // HLT
-
-    case 0x3C: c->a = i8080_inr(c, c->a); break; // INR A
-    case 0x04: c->b = i8080_inr(c, c->b); break; // INR B
-    case 0x0C: c->c = i8080_inr(c, c->c); break; // INR C
-    case 0x14: c->d = i8080_inr(c, c->d); break; // INR D
-    case 0x1C: c->e = i8080_inr(c, c->e); break; // INR E
-    case 0x24: c->h = i8080_inr(c, c->h); break; // INR H
-    case 0x2C: c->l = i8080_inr(c, c->l); break; // INR L
-    case 0x34:
-        i8080_wb(c, i8080_get_hl(c), i8080_inr(c, i8080_rb(c, i8080_get_hl(c))));
-        break; // INR M
-
-    case 0x3D: c->a = i8080_dcr(c, c->a); break; // DCR A
-    case 0x05: c->b = i8080_dcr(c, c->b); break; // DCR B
-    case 0x0D: c->c = i8080_dcr(c, c->c); break; // DCR C
-    case 0x15: c->d = i8080_dcr(c, c->d); break; // DCR D
-    case 0x1D: c->e = i8080_dcr(c, c->e); break; // DCR E
-    case 0x25: c->h = i8080_dcr(c, c->h); break; // DCR H
-    case 0x2D: c->l = i8080_dcr(c, c->l); break; // DCR L
-    case 0x35:
-        i8080_wb(c, i8080_get_hl(c), i8080_dcr(c, i8080_rb(c, i8080_get_hl(c))));
-        break; // DCR M
-
-    case 0x03: i8080_set_bc(c, i8080_get_bc(c) + 1); break; // INX B
-    case 0x13: i8080_set_de(c, i8080_get_de(c) + 1); break; // INX D
-    case 0x23: i8080_set_hl(c, i8080_get_hl(c) + 1); break; // INX H
-    case 0x33: c->sp += 1; break; // INX SP
-
-    case 0x0B: i8080_set_bc(c, i8080_get_bc(c) - 1); break; // DCX B
-    case 0x1B: i8080_set_de(c, i8080_get_de(c) - 1); break; // DCX D
-    case 0x2B: i8080_set_hl(c, i8080_get_hl(c) - 1); break; // DCX H
-    case 0x3B: c->sp -= 1; break; // DCX SP
-
-    case 0x27: i8080_daa(c); break; // DAA
-    case 0x2F: c->a = ~c->a; break; // CMA
-    case 0x37: c->cf = 1; break; // STC
-    case 0x3F: c->cf = !c->cf; break; // CMC
-
-    case 0x07: i8080_rlc(c); break; // RLC (rotate left)
-    case 0x0F: i8080_rrc(c); break; // RRC (rotate right)
-    case 0x17: i8080_ral(c); break; // RAL
-    case 0x1F: i8080_rar(c); break; // RAR
-
-    case 0xA7: i8080_ana(c, c->a); break; // ANA A
-    case 0xA0: i8080_ana(c, c->b); break; // ANA B
-    case 0xA1: i8080_ana(c, c->c); break; // ANA C
-    case 0xA2: i8080_ana(c, c->d); break; // ANA D
-    case 0xA3: i8080_ana(c, c->e); break; // ANA E
-    case 0xA4: i8080_ana(c, c->h); break; // ANA H
-    case 0xA5: i8080_ana(c, c->l); break; // ANA L
-    case 0xA6: i8080_ana(c, i8080_rb(c, i8080_get_hl(c))); break; // ANA M
-    case 0xE6: i8080_ana(c, i8080_next_byte(c)); break; // ANI byte
-
-    case 0xAF: i8080_xra(c, c->a); break; // XRA A
-    case 0xA8: i8080_xra(c, c->b); break; // XRA B
-    case 0xA9: i8080_xra(c, c->c); break; // XRA C
-    case 0xAA: i8080_xra(c, c->d); break; // XRA D
-    case 0xAB: i8080_xra(c, c->e); break; // XRA E
-    case 0xAC: i8080_xra(c, c->h); break; // XRA H
-    case 0xAD: i8080_xra(c, c->l); break; // XRA L
-    case 0xAE: i8080_xra(c, i8080_rb(c, i8080_get_hl(c))); break; // XRA M
-    case 0xEE: i8080_xra(c, i8080_next_byte(c)); break; // XRI byte
-
-    case 0xB7: i8080_ora(c, c->a); break; // ORA A
-    case 0xB0: i8080_ora(c, c->b); break; // ORA B
-    case 0xB1: i8080_ora(c, c->c); break; // ORA C
-    case 0xB2: i8080_ora(c, c->d); break; // ORA D
-    case 0xB3: i8080_ora(c, c->e); break; // ORA E
-    case 0xB4: i8080_ora(c, c->h); break; // ORA H
-    case 0xB5: i8080_ora(c, c->l); break; // ORA L
-    case 0xB6: i8080_ora(c, i8080_rb(c, i8080_get_hl(c))); break; // ORA M
-    case 0xF6: i8080_ora(c, i8080_next_byte(c)); break; // ORI byte
-
-    case 0xBF: i8080_cmp(c, c->a); break; // CMP A
-    case 0xB8: i8080_cmp(c, c->b); break; // CMP B
-    case 0xB9: i8080_cmp(c, c->c); break; // CMP C
-    case 0xBA: i8080_cmp(c, c->d); break; // CMP D
-    case 0xBB: i8080_cmp(c, c->e); break; // CMP E
-    case 0xBC: i8080_cmp(c, c->h); break; // CMP H
-    case 0xBD: i8080_cmp(c, c->l); break; // CMP L
-    case 0xBE: i8080_cmp(c, i8080_rb(c, i8080_get_hl(c))); break; // CMP M
-    case 0xFE: i8080_cmp(c, i8080_next_byte(c)); break; // CPI byte
-
-    case 0xC3: i8080_jmp(c, i8080_next_word(c)); break; // JMP
-    case 0xC2: i8080_cond_jmp(c, c->zf == 0); break; // JNZ
-    case 0xCA: i8080_cond_jmp(c, c->zf == 1); break; // JZ
-    case 0xD2: i8080_cond_jmp(c, c->cf == 0); break; // JNC
-    case 0xDA: i8080_cond_jmp(c, c->cf == 1); break; // JC
-    case 0xE2: i8080_cond_jmp(c, c->pf == 0); break; // JPO
-    case 0xEA: i8080_cond_jmp(c, c->pf == 1); break; // JPE
-    case 0xF2: i8080_cond_jmp(c, c->sf == 0); break; // JP
-    case 0xFA: i8080_cond_jmp(c, c->sf == 1); break; // JM
-
-    case 0xE9: c->pc = i8080_get_hl(c); break; // PCHL
-    case 0xCD: i8080_call(c, i8080_next_word(c)); break; // CALL
-
-    case 0xC4: i8080_cond_call(c, c->zf == 0); break; // CNZ
-    case 0xCC: i8080_cond_call(c, c->zf == 1); break; // CZ
-    case 0xD4: i8080_cond_call(c, c->cf == 0); break; // CNC
-    case 0xDC: i8080_cond_call(c, c->cf == 1); break; // CC
-    case 0xE4: i8080_cond_call(c, c->pf == 0); break; // CPO
-    case 0xEC: i8080_cond_call(c, c->pf == 1); break; // CPE
-    case 0xF4: i8080_cond_call(c, c->sf == 0); break; // CP
-    case 0xFC: i8080_cond_call(c, c->sf == 1); break; // CM
-
-    case 0xC9: i8080_ret(c); break; // RET
-    case 0xC0: i8080_cond_ret(c, c->zf == 0); break; // RNZ
-    case 0xC8: i8080_cond_ret(c, c->zf == 1); break; // RZ
-    case 0xD0: i8080_cond_ret(c, c->cf == 0); break; // RNC
-    case 0xD8: i8080_cond_ret(c, c->cf == 1); break; // RC
-    case 0xE0: i8080_cond_ret(c, c->pf == 0); break; // RPO
-    case 0xE8: i8080_cond_ret(c, c->pf == 1); break; // RPE
-    case 0xF0: i8080_cond_ret(c, c->sf == 0); break; // RP
-    case 0xF8: i8080_cond_ret(c, c->sf == 1); break; // RM
-
-    case 0xC7: i8080_call(c, 0x00); break; // RST 0
-    case 0xCF: i8080_call(c, 0x08); break; // RST 1
-    case 0xD7: i8080_call(c, 0x10); break; // RST 2
-    case 0xDF: i8080_call(c, 0x18); break; // RST 3
-    case 0xE7: i8080_call(c, 0x20); break; // RST 4
-    case 0xEF: i8080_call(c, 0x28); break; // RST 5
-    case 0xF7: i8080_call(c, 0x30); break; // RST 6
-    case 0xFF: i8080_call(c, 0x38); break; // RST 7
-
-    case 0xC5: i8080_push_stack(c, i8080_get_bc(c)); break; // PUSH B
-    case 0xD5: i8080_push_stack(c, i8080_get_de(c)); break; // PUSH D
-    case 0xE5: i8080_push_stack(c, i8080_get_hl(c)); break; // PUSH H
-    case 0xF5: i8080_push_psw(c); break; // PUSH PSW
-    case 0xC1: i8080_set_bc(c, i8080_pop_stack(c)); break; // POP B
-    case 0xD1: i8080_set_de(c, i8080_pop_stack(c)); break; // POP D
-    case 0xE1: i8080_set_hl(c, i8080_pop_stack(c)); break; // POP H
-    case 0xF1: i8080_pop_psw(c); break; // POP PSW
-
-    case 0xDB: c->a = c->port_in(c->userdata, i8080_next_byte(c)); break; // IN
-    case 0xD3: c->port_out(c->userdata, i8080_next_byte(c), c->a); break; // OUT
-
-    case 0x08:
-    case 0x10:
-    case 0x18:
-    case 0x20:
-    case 0x28:
-    case 0x30:
-    case 0x38: break; // undocumented NOPs
-
-    case 0xD9: i8080_ret(c); break; // undocumented RET
-
-    case 0xDD:
-    case 0xED:
-    case 0xFD: i8080_call(c, i8080_next_word(c)); break; // undocumented CALLs
-
-    case 0xCB: i8080_jmp(c, i8080_next_word(c)); break; // undocumented JMP
-    }
-}
-
-// initialises the emulator with default values
-void i8080_init(i8080* const c) {
-    c->read_byte = NULL;
-    c->write_byte = NULL;
-    c->port_in = NULL;
-    c->port_out = NULL;
-    c->userdata = NULL;
-
-    c->cyc = 0;
-
-    c->pc = 0;
-    c->sp = 0;
-
-    c->a = 0;
-    c->b = 0;
-    c->c = 0;
-    c->d = 0;
-    c->e = 0;
-    c->h = 0;
-    c->l = 0;
-
-    c->sf = 0;
-    c->zf = 0;
-    c->hf = 0;
-    c->pf = 0;
-    c->cf = 0;
-    c->iff = 0;
-
-    c->halted = 0;
-    c->interrupt_pending = 0;
-    c->interrupt_vector = 0;
-    c->interrupt_delay = 0;
-}
-
-// executes one instruction
-void i8080_step(i8080* const c) {
-    // interrupt processing: if an interrupt is pending and IFF is set,
-    // we execute the interrupt vector passed by the user.
-    if (c->interrupt_pending && c->iff && c->interrupt_delay == 0) {
-        c->interrupt_pending = 0;
-        c->iff = 0;
-        c->halted = 0;
-
-        i8080_execute(c, c->interrupt_vector);
-    }
-    else if (!c->halted) {
-        i8080_execute(c, i8080_next_byte(c));
-    }
-}
-
-// asks for an interrupt to be serviced
-void i8080_interrupt(i8080* const c, uint8_t opcode) {
-    c->interrupt_pending = 1;
-    c->interrupt_vector = opcode;
-}
-
-// outputs a debug trace of the emulator state to the standard output,
-// including registers and flags
-void i8080_debug_output(i8080* const c, bool print_disassembly) {
-    uint8_t f = 0;
-    f |= c->sf << 7;
-    f |= c->zf << 6;
-    f |= c->hf << 4;
-    f |= c->pf << 2;
-    f |= 1 << 1; // bit 1 is always 1
-    f |= c->cf << 0;
-
-    printf("PC: %04X, AF: %04X, BC: %04X, DE: %04X, HL: %04X, SP: %04X, CYC: %lu",
-        c->pc, c->a << 8 | f, i8080_get_bc(c), i8080_get_de(c), i8080_get_hl(c),
-        c->sp, c->cyc);
-
-    printf("\t(%02X %02X %02X %02X)", i8080_rb(c, c->pc), i8080_rb(c, c->pc + 1),
-        i8080_rb(c, c->pc + 2), i8080_rb(c, c->pc + 3));
-
-    if (print_disassembly) {
-        printf(" - %s", DISASSEMBLE_TABLE[i8080_rb(c, c->pc)]);
-    }
-
-    printf("\n");
-}
-
-#undef SET_ZSP
